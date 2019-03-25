@@ -102,6 +102,7 @@ class TranxParser(nn.Module):
         return s_att
     
     def decode(self, batch, src_mask, encodings, final_state):
+        print(src_mask.shape, 'mask')
         # produce attention vectors
         batch_size = len(batch)
         h, c = final_state
@@ -132,6 +133,25 @@ class TranxParser(nn.Module):
 
         s_att_all = torch.stack(s_att_all, dim=0)
         return s_att_all  
+    
+    
+    def pointer_weights(self, encodings, src_mask, s_att_vecs):
+        # to compute hWs. encodings: B x hiddendim, s_att_vecs: T x B x  attsize, ptr lin layer dimx -> attsize
+        hW = self.ptr_net_lin(encodings) # B x S x attsize
+        scores = torch.matmul(s_att_vecs, hW.permute(0, 2, 1))  # hW is (B x S x attsize), att_vecs is (B x T x attsize|)
+        scores = scores.permute(1, 0, 2) # T x B x S
+        # src_mask is B x S
+        src_token_mask = self.src_mask.unsqueeze(0).expand_as(scores)
+        scores.masked_fill_(src_token_mask, -float('inf'))
+        return F.softmax(scores, dim=2)
+
+    def get_action_prob(self, s_att_vecs, lin_layer, weight):
+        # to compute aWs. s_att_vecs: T x B x  attsize, weight: |a| x embdim, Lin layer dimx -> attsize 
+        aW = lin_layer(weight.weight) # |a| x  attsize
+        # aW is (|a| x  attsize), s_att_vecs is (T x B x  attsize)
+        scores = torch.matmul(s_att_vecs, aW.t())  
+        scores = scores.permute(1, 0, 2) # B x T x |a| 
+        return F.softmax(scores, dim=2)
         
     
     def forward(self, batch):
@@ -151,3 +171,6 @@ class TranxParser(nn.Module):
         self.src_mask = self.get_token_mask(self.sents_lens_sorted)
         encodings, final_states = self.encode(self.sents_sorted, self.sents_lens_sorted)
         s_att_vecs = self.decode(self.examples_sorted, self.src_mask, encodings, final_states)
+        
+        
+  
