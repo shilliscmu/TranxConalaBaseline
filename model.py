@@ -7,11 +7,11 @@ import torch.nn.utils.rnn as rnn_utils
 from asdl.transition_system import ApplyRuleAction, ReduceAction
 
 
-SRC_EMB_SIZE = 64
+SRC_EMB_SIZE = 128
 ACTION_EMB_SIZE = SRC_EMB_SIZE
-FIELD_EMB_SIZE = 8
-LSTM_HIDDEN_DIM = 200
-ATT_SIZE = 200
+FIELD_EMB_SIZE = 64
+LSTM_HIDDEN_DIM = 256
+ATT_SIZE = 256
 DROPOUT = 0.2
 
 
