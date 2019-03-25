@@ -1,5 +1,14 @@
+import torch
+import numpy as np
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+import torch.nn.utils.rnn as rnn_utils
+from asdl.transition_system import ApplyRuleAction, ReduceAction
+
+
 SRC_EMB_SIZE = 64
-ACTION_EMB_SIZE = 32
+ACTION_EMB_SIZE = SRC_EMB_SIZE
 FIELD_EMB_SIZE = 8
 LSTM_HIDDEN_DIM = 200
 ATT_SIZE = 200
@@ -36,7 +45,7 @@ class TranxParser(nn.Module):
         # post decode
         self.ptr_net_lin = nn.Linear(LSTM_HIDDEN_DIM, ATT_SIZE, bias=False)
         self.applyconstrprob_lin = nn.Linear(ACTION_EMB_SIZE, ATT_SIZE, bias=False)
-        self.query_vec_to_action_embed = nn.Linear(ATT_SIZE, SRC_EMB_SIZE, bias=False)
+        self.attn_vec_to_action_emb = nn.Linear(ATT_SIZE, ACTION_EMB_SIZE, bias=False)
         self.gen_vs_copy_lin = nn.Linear(ATT_SIZE, 1)
         
         
@@ -143,7 +152,7 @@ class TranxParser(nn.Module):
         # src_mask is B x S
         src_token_mask = self.src_mask.unsqueeze(0).expand_as(scores)
         scores.masked_fill_(src_token_mask, -float('inf'))
-        return F.softmax(scores, dim=2)
+        return F.softmax(scores.permute(1, 0, 2), dim=2) # B x T x S 
 
     def get_action_prob(self, s_att_vecs, lin_layer, weight):
         # to compute aWs. s_att_vecs: T x B x  attsize, weight: |a| x embdim, Lin layer dimx -> attsize 
@@ -151,12 +160,83 @@ class TranxParser(nn.Module):
         # aW is (|a| x  attsize), s_att_vecs is (T x B x  attsize)
         scores = torch.matmul(s_att_vecs, aW.t())  
         scores = scores.permute(1, 0, 2) # B x T x |a| 
-        return F.softmax(scores, dim=2)
+        return F.softmax(scores, dim=2)  # B x T x |a| 
         
+    def get_rule_masks(self, batch):
+        is_applyconstr = torch.zeros((len(batch), self.T))
+        is_gentoken = torch.zeros((len(batch), self.T))
+        is_copy = torch.zeros((len(batch), self.T))
+        applyconstr_ids = torch.zeros((len(batch), self.T))
+        gentok_ids = torch.zeros((len(batch), self.T))
+        is_copy_tok = torch.zeros((len(batch), self.T, self.S))
+        for ei, example in enumerate(self.examples):
+            for t in range(self.T):
+                if t < len(example.tgt_actions):
+                    action = example.tgt_actions[t].action
+
+                    if isinstance(action, ApplyRuleAction):
+                        is_applyconstr[ei, t] = 1
+                        applyconstr_ids[ei, t] = self.grammar.prod2id[action.production]
+
+                    elif isinstance(action, ReduceAction):
+                        is_applyconstr[ei, t] = 1
+                        applyconstr_ids[ei, t] = len(self.grammar)
+
+                    else:  # not apply constr
+                        src_sent = self.src_sents[ei]
+                        action_token = str(action.token)
+                        token_idx = self.vocab.primitive[action.token]
+                        gentok_ids[ei, t] = token_idx
+                        no_copy = True
+                        for idx, src_tok in enumerate(src_sent):
+                            if src_tok == action_token:
+                                is_copy_tok[ei, t, idx] = 1
+                                no_copy = False
+                                is_copy[ei, t] = 1
+                        if no_copy or token_idx != self.vocab.primitive.unk_id:
+                            is_gentoken[ei, t] = 1
+
+        return is_applyconstr, is_gentoken, is_copy, applyconstr_ids, gentok_ids, is_copy_tok
     
+      
+    def compute_target_probabilities(self, encodings, s_att_vecs, src_mask, batch):
+        # s_att_vecs is T x B x attsize
+        is_applyconstr, is_gentoken, is_copy, applyconstr_ids, gentok_ids, is_copy_tok = self.get_rule_masks(batch)
+
+        p_a_apply = self.get_action_prob(s_att_vecs, self.attn_vec_to_action_emb,
+                                         self.apply_const_and_reduce_emb)  # B x T x |a|
+        p_gen = self.gen_vs_copy_lin(s_att_vecs)  # T x B x 1
+        p_copy = 1 - p_gen  # T x B x 1
+        p_v_copy = self.pointer_weights(encodings, src_mask, s_att_vecs)  # B x T x S
+        p_tok_gen = self.get_action_prob(s_att_vecs, self.attn_vec_to_action_emb, self.primitives_emb)  # B x T x |t|
+
+        target_p_copy = torch.sum(p_v_copy * is_copy_tok, dim=2).t()  # T x B
+        # target lookup
+        # T x B (*ids is BxT)
+        target_p_a_apply = torch.gather(p_a_apply, dim=2, index=applyconstr_ids.t().unsqueeze(2))
+        target_p_a_gen = torch.gather(p_tok_gen, dim=2, index=gentok_ids.t().unsqueeze(2))
+
+        # T x B
+        p_a_apply_target = target_p_a_apply * is_applyconstr.t()
+        p_a_gen_target = p_gen[:, :, 0] * target_p_a_gen * is_gentoken.t()  # is_... is B x T
+        p_a_gen_target += p_copy[:, :, 0] * target_p_copy * is_copy.t()  # T x B
+        action_prob_target = p_a_apply_target + p_a_gen_target
+
+        action_mask_sum = is_applyconstr + is_gentoken + is_copy
+        action_mask_sum = action_mask_sum.t()  # T x B
+
+        # 1s where we pad, these we can ignore
+        action_mask_pad = action_mask_sum == 0
+
+        action_prob_target.masked_fill_(action_mask_pad, 1e-7)
+        # make the not so useful stuff 0
+        action_prob_target = action_prob_target.log() * (1 - action_mask_pad)
+
+        return torch.sum(action_prob_target, dim=0)  # B
+
     def forward(self, batch):
         # batch is list of examples
-#         self.src_mask = self.get_token_mask(batch)
+        #         self.src_mask = self.get_token_mask(batch)
         self.T = max(len(e.tgt_actions) for e in batch)
         self.sents = [e.src_token_ids for e in batch]
         self.sent_lens = [len(s) for s in self.sents]
@@ -166,11 +246,10 @@ class TranxParser(nn.Module):
         self.sents_sorted = [self.sents[i] for i in sent_idxs]
         self.sents_lens_sorted = [self.sent_lens[i] for i in sent_idxs]
         self.examples_sorted = [batch[i] for i in sent_idxs]
-#         return sents_sorted
+        #         return sents_sorted
         print(self.sents_sorted, self.sents_lens_sorted)
         self.src_mask = self.get_token_mask(self.sents_lens_sorted)
         encodings, final_states = self.encode(self.sents_sorted, self.sents_lens_sorted)
         s_att_vecs = self.decode(self.examples_sorted, self.src_mask, encodings, final_states)
-        
-        
-  
+        scores = self.compute_target_probabilities(encodings, s_att_vecs, self.src_mask, self.examples_sorted)
+        return scores, final_states[0]
