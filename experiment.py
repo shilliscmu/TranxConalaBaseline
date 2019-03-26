@@ -78,7 +78,7 @@ def train(train_file_path):
             ret_val = model.forward(batch_examples)
             loss = -ret_val[0]
 
-            loss_val = torch.sum(loss).data[0]
+            loss_val = torch.sum(loss).item()
             report_loss += loss_val
             report_examples += len(batch_examples)
             loss = torch.mean(loss)
@@ -95,7 +95,7 @@ def train(train_file_path):
 
         model_file = SAVE_TO + '.iter%d.bin' % train_iter
         print('save model to [%s]' % model_file)
-        model.save(model_file)
+        model.save(model_file, saveGrammar=False)
 
         # perform validation
 
@@ -128,7 +128,7 @@ def train(train_file_path):
             model_file = SAVE_TO + '.bin'
             print('save the current model ..')
             print('save model to [%s]' % model_file)
-            model.save(model_file)
+            model.save(model_file, False)
             # also save the optimizers' state
             torch.save(optimizer.state_dict(), SAVE_TO + '.optim.bin')
         elif patience < PATIENCE and epoch >= DECAY_LR_AFTER_EPOCH:

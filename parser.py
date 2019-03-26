@@ -21,33 +21,33 @@ class Parser(nn.Module):
         self.transition_sys = transition_sys
         self.grammar = self.transition_sys.grammar
 
-        self.get_field_embedding = nn.Embedding(len(transition_sys.grammar.fields), 64)
-        nn.init.xavier_normal(self.get_field_embedding.weight.data)
-        self.get_production_embedding = nn.Embedding(len(transition_sys.grammar) + 1, 128)
-        nn.init.xavier_normal(self.get_production_embedding.weight.data)
-        self.get_primitive_embedding = nn.Embedding(len(vocab.primitive), 128)
-        nn.init.xavier_normal(self.get_primitive_embedding.weight.data)
+        self.fields_emb = nn.Embedding(len(transition_sys.grammar.fields), 64)
+        nn.init.xavier_normal(self.fields_emb.weight.data)
+        self.apply_const_and_reduce_emb = nn.Embedding(len(transition_sys.grammar) + 1, 128)
+        nn.init.xavier_normal(self.apply_const_and_reduce_emb.weight.data)
+        self.primitives_emb = nn.Embedding(len(vocab.primitive), 128)
+        nn.init.xavier_normal(self.primitives_emb.weight.data)
 
         # action embeddings, field embeddings, hidden_state, attention
         input_dimension = 128 + 64 + 256 + 256
         self.decoder = nn.LSTMCell(input_dimension, 256)
         self.decoder_cell_initializer_linear_layer = nn.Linear(256, 256)
-        self.attention_from_source_to_decoder = nn.Linear(256, 256, bias=False)
-        self.attention_vector = nn.Linear(256 + 256, 256, bias=False)
+        self.lin_attn = nn.Linear(256, 256, bias=False)
+        self.attention_vector_lin = nn.Linear(256 + 256, 256, bias=False)
         self.constructor_or_reduce_prediction_bias = nn.Parameter(torch.FloatTensor(len(transition_sys.grammar) + 1).zero_())
         self.token_generation_prediction_bias = nn.Parameter(torch.FloatTensor(self.vocab.primitive).zero_())
 
         # copy mechanism
-        self.source_pointer_net = PointerNet(256, 256)
-        self.primitive_predictor = nn.Linear(256, 2)
+        self.ptr_net_lin = PointerNet(256, 256)
+        self.gen_vs_copy_lin = nn.Linear(256, 2)
 
         # use this to get action probs by dot-prod linearized attention vec and action embeds
-        self.convert_attention_to_action_or_primitive_embedding = nn.Linear(256, 128, bias=False)
+        self.attn_vec_to_action_emb = nn.Linear(256, 128, bias=False)
 
-        self.production_prediction = lambda att: F.linear(self.convert_attention_to_action_or_primitive_embedding(att),
-                                                          self.get_production_embedding.weight, self.constructor_or_reduce_prediction_bias)
-        self.primitive_prediction = lambda att: F.linear(self.convert_attention_to_action_or_primitive_embedding(att),
-                                                         self.get_primitive_embedding.weight, self.token_generation_prediction_bias)
+        self.production_prediction = lambda att: F.linear(self.attn_vec_to_action_emb(att),
+                                                          self.apply_const_and_reduce_emb.weight, self.constructor_or_reduce_prediction_bias)
+        self.primitive_prediction = lambda att: F.linear(self.attn_vec_to_action_emb(att),
+                                                         self.primitives_emb.weight, self.token_generation_prediction_bias)
         self.dropout = nn.Dropout(0.3)
 
     def process(self, sentences, vocab):
@@ -98,11 +98,11 @@ class Parser(nn.Module):
                 for action in actions:
                     if action:
                         if isinstance(action, ApplyRuleAction):
-                            action_embedding = self.get_production_embedding.weight[self.grammar.production_to_id[action.production]]
+                            action_embedding = self.apply_const_and_reduce_emb.weight[self.grammar.production_to_id[action.production]]
                         elif isinstance(action, ReduceAction):
-                            action_embedding = self.get_production_embedding.weight[len(self.grammar)]
+                            action_embedding = self.apply_const_and_reduce_emb.weight[len(self.grammar)]
                         else:
-                            action_embedding = self.get_primitive_embedding.weight[self.vocab.primitive[action.token]]
+                            action_embedding = self.primitives_emb.weight[self.vocab.primitive[action.token]]
                         action_embeddings.append(action_embedding)
                     else:
                         action_embeddings.append(Variable(torch.cuda.FloatTensor(128).zero_()))
@@ -111,7 +111,7 @@ class Parser(nn.Module):
                 encoder_inputs.append(att_t1)
 
                 frontier_fields = [h.frontier_field.field for h in hypotheses]
-                frontier_field_embeddings = self.get_field_embedding(Variable(torch.cuda.FloatTensor([self.grammar.field_to_id[f] for f in frontier_fields])))
+                frontier_field_embeddings = self.fields_emb(Variable(torch.cuda.FloatTensor([self.grammar.field_to_id[f] for f in frontier_fields])))
                 encoder_inputs.append(frontier_field_embeddings)
 
                 parent_created_times = [h.frontier_node.created_time for h in hypotheses]
@@ -124,8 +124,8 @@ class Parser(nn.Module):
             (h_t, cell), attention = self.step(x, h_t1, expanded_source_encodings, expanded_source_encodings_attention_linear_layer)
             log_p_of_each_apply_rule_action = F.log_softmax(self.production_prediction(attention), dim=-1)
             p_of_generating_each_primitive_in_vocab = F.softmax(self.primitive_prediction(attention), dim=-1)
-            p_of_copying_from_source_sentence = self.source_pointer_net(source_encodings, None, attention.unsqueeze(0).squeeze(0))
-            p_of_making_primitive_prediction = F.softmax(self.primitive_predictor(attention), dim=-1)
+            p_of_copying_from_source_sentence = self.ptr_net_lin(source_encodings, None, attention.unsqueeze(0).squeeze(0))
+            p_of_making_primitive_prediction = F.softmax(self.gen_vs_copy_lin(attention), dim=-1)
             p_of_each_primitive = p_of_making_primitive_prediction[:, 0].unsqueeze(1) * p_of_generating_each_primitive_in_vocab
 
             hypothesis_ids_for_which_we_gentoken = []
@@ -252,7 +252,7 @@ class Parser(nn.Module):
     def step(self, x, h_t1, expanded_source_encodings, expanded_source_encodings_attention_linear_layer):
         h_t, cell_t = self.decoder(x, h_t1)
         context_t = self.dot_product_attention(h_t, expanded_source_encodings, expanded_source_encodings_attention_linear_layer)
-        attention = F.tanh(self.attention_vector(torch.cat([h_t, context_t], 1)))
+        attention = F.tanh(self.attention_vector_lin(torch.cat([h_t, context_t], 1)))
         attention = self.dropout(attention)
         return (h_t, cell_t), attention
 
@@ -263,13 +263,13 @@ class Parser(nn.Module):
         pass
 
 class PointerNet(nn.Module):
-    def __init__(self, attention_vector_size, source_encoding_size):
+    def __init__(self, attention_vector_lin_size, source_encoding_size):
         super(PointerNet, self).__init__()
-        self.source_encoding_linear = nn.Linear(source_encoding_size, attention_vector_size, bias=False)
+        self.source_encoding_linear = nn.Linear(source_encoding_size, attention_vector_lin_size, bias=False)
 
-    def forward(self, source_encodings, attention_vector):
+    def forward(self, source_encodings, attention_vector_lin):
         source_encodings = self.source_encoding_linear(source_encodings)
-        attention = attention_vector.permute(1, 0, 2).unsqueeze(3)
+        attention = attention_vector_lin.permute(1, 0, 2).unsqueeze(3)
         weights = torch.matmul(source_encodings, attention).squeeze(3)
         weights = weights.permute(1, 0, 2)
         weights = F.softmax(weights, dim=-1)

@@ -1,3 +1,5 @@
+import os
+
 import torch
 import numpy as np
 import torch.nn as nn
@@ -29,6 +31,7 @@ class TranxParser(nn.Module):
         # src text
         self.src_emb = nn.Embedding(len(vocab.source), SRC_EMB_SIZE, padding_idx=0)
         self.apply_const_and_reduce_emb = nn.Embedding(len(transition_system.grammar) + 1, ACTION_EMB_SIZE)
+        # self.apply_const_and_reduce_emb = nn.Embedding(len(transition_system.grammar) + 1, ACTION_EMB_SIZE)
         self.primitives_emb = nn.Embedding(len(vocab.primitive), ACTION_EMB_SIZE)
         self.fields_emb = nn.Embedding(len(transition_system.grammar.fields), FIELD_EMB_SIZE)
 
@@ -51,12 +54,13 @@ class TranxParser(nn.Module):
         # post decode
         self.ptr_net_lin = nn.Linear(LSTM_HIDDEN_DIM, ATT_SIZE, bias=False)
         self.applyconstrprob_lin = nn.Linear(ACTION_EMB_SIZE, ATT_SIZE, bias=False)
-        self.attn_vec_to_action_emb = nn.Linear(ATT_SIZE, ACTION_EMB_SIZE, bias=False)
+        # self.attn_vec_to_action_emb = nn.Linear(ATT_SIZE, ACTION_EMB_SIZE, bias=False)
+        self.attn_vec_to_action_emb = nn.Linear(ACTION_EMB_SIZE, ATT_SIZE, bias=False)
         self.gen_vs_copy_lin = nn.Linear(ATT_SIZE, 1)
 
     def parse(self, sentence, context=None, beam_size=5):
         primitive_vocab = self.vocab.primitive
-        processed_sentence = self.process([sentence], self.vocab.source)
+        processed_sentence = self.process([sentence])
         source_encodings, (last_encoder_state, last_encoder_cell) = self.encode(processed_sentence, [len(sentence)])
         self.decoder_cell_initializer_linear_layer = nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM)
         h_t1 = torch.tanh(self.decoder_cell_initializer_linear_layer(last_encoder_cell))
@@ -234,7 +238,8 @@ class TranxParser(nn.Module):
         return (h_t, cell_t), attention
 
     def encode(self, sents, sent_lens):  # done
-        # batch: 
+        # batch:
+
         padded_sents = rnn_utils.pad_sequence(sents, batch_first=True)
         #         print(padded_sents)
         print("About to embed source sentences.")
@@ -243,7 +248,9 @@ class TranxParser(nn.Module):
         print("About to pad embedded sentences.")
         inputs = rnn_utils.pack_padded_sequence(embeddings, sent_lens, batch_first=True)
         print("About to encode embedded sentences.")
+        inputs = inputs.cuda()
         encodings, final_state = self.encoder(inputs)
+        encodings, final_state = encodings.cuda(), final_state.cuda()
         encodings, lens = rnn_utils.pad_packed_sequence(encodings, batch_first=True)
         print(encodings.shape)  # B x T x hiddendim
         return encodings, final_state
@@ -360,10 +367,14 @@ class TranxParser(nn.Module):
             scores = scores.squeeze(1)
         return F.softmax(scores, dim=-1)  # B x T x S or H x S
 
+    # production_readout
     def get_action_prob(self, s_att_vecs, lin_layer, weight):
         # to compute aWs. s_att_vecs: T x B x  attsize, weight: |a| x embdim, Lin layer dimx -> attsize 
+        print("getting action prob.")
+        #weight.weight is 97x128
         aW = lin_layer(weight.weight)  # |a| x  attsize
         # aW is (|a| x  attsize), s_att_vecs is (T x B x  attsize)
+        #aW is self.production_embed.weight
         scores = torch.matmul(s_att_vecs, aW.t())
         if len(scores.shape) == 3:
             scores = scores.permute(1, 0, 2)  # B x T x |a|
@@ -373,8 +384,8 @@ class TranxParser(nn.Module):
         is_applyconstr = torch.zeros((len(batch), self.T))
         is_gentoken = torch.zeros((len(batch), self.T))
         is_copy = torch.zeros((len(batch), self.T))
-        applyconstr_ids = torch.zeros((len(batch), self.T))
-        gentok_ids = torch.zeros((len(batch), self.T))
+        applyconstr_ids = torch.zeros((len(batch), self.T), dtype=torch.int64)
+        gentok_ids = torch.zeros((len(batch), self.T), dtype=torch.int64)
         is_copy_tok = torch.zeros((len(batch), self.T, self.S))
         for ei, example in enumerate(self.examples_sorted):
             for t in range(self.T):
@@ -407,24 +418,39 @@ class TranxParser(nn.Module):
 
     def compute_target_probabilities(self, encodings, s_att_vecs, src_mask, batch):
         # s_att_vecs is T x B x attsize
-        is_applyconstr, is_gentoken, is_copy, applyconstr_ids, gentok_ids, is_copy_tok = self.get_rule_masks(batch)
+        is_applyconstr, is_gentoken, is_copy, applyconstr_ids, gentok_ids, is_copy_tok = [e.cuda() for e in self.get_rule_masks(batch)]
 
         p_a_apply = self.get_action_prob(s_att_vecs, self.attn_vec_to_action_emb,
                                          self.apply_const_and_reduce_emb)  # B x T x |a|
         p_gen = self.gen_vs_copy_lin(s_att_vecs)  # T x B x 1
         p_copy = 1 - p_gen  # T x B x 1
+        src_mask = src_mask.cuda()
         p_v_copy = self.pointer_weights(encodings, src_mask, s_att_vecs)  # B x T x S
         p_tok_gen = self.get_action_prob(s_att_vecs, self.attn_vec_to_action_emb, self.primitives_emb)  # B x T x |t|
 
+        print("p_v_copy type: " + p_v_copy.type())
+        print("is_copy_tok type: " + is_copy_tok.type())
         target_p_copy = torch.sum(p_v_copy * is_copy_tok, dim=2).t()  # T x B
+
         # target lookup
         # T x B (*ids is BxT)
-        target_p_a_apply = torch.gather(p_a_apply, dim=2, index=applyconstr_ids.t().unsqueeze(2))
-        target_p_a_gen = torch.gather(p_tok_gen, dim=2, index=gentok_ids.t().unsqueeze(2))
+        print("index size: " + repr(applyconstr_ids.t().unsqueeze(2).permute(1,0,2).size()))
+        print("p_a_apply size: " + repr(p_a_apply.size()))
+        print("applyconstr_ids size: " + repr(applyconstr_ids.size()))
+        target_p_a_apply = torch.gather(p_a_apply, dim=2, index=applyconstr_ids.t().unsqueeze(2).permute(1,0,2))
+        print("index size: " + repr(gentok_ids.t().unsqueeze(2).permute(1,0,2).size()))
+        print("p_tok_gen size: " + repr(p_tok_gen.size()))
+        print("gentok_ids size: " + repr(gentok_ids.size()))
+        target_p_a_gen = torch.gather(p_tok_gen, dim=2, index=gentok_ids.t().unsqueeze(2).permute(1,0,2))
 
         # T x B
-        p_a_apply_target = target_p_a_apply * is_applyconstr.t()
-        p_a_gen_target = p_gen[:, :, 0] * target_p_a_gen * is_gentoken.t()  # is_... is B x T
+        print("target_p_a_apply size: " + repr(target_p_a_apply.squeeze(1).size()))
+        print("is_applyconstr.t() size: " + repr(is_applyconstr.t().size()))
+        p_a_apply_target = target_p_a_apply.squeeze(1) * is_applyconstr.t()
+        print("\np_gen[:,:,0] size: " + repr(p_gen[:, :, 0].size()))
+        print("target_p_a_gen size: " + repr(target_p_a_gen.squeeze(1).size()))
+        print("is_gentoken.t() size: " + repr(is_gentoken.t().size()))
+        p_a_gen_target = p_gen[:, :, 0] * target_p_a_gen.squeeze(1) * is_gentoken.t()  # is_... is B x T
         p_a_gen_target += p_copy[:, :, 0] * target_p_copy * is_copy.t()  # T x B
         action_prob_target = p_a_apply_target + p_a_gen_target
 
@@ -436,7 +462,9 @@ class TranxParser(nn.Module):
 
         action_prob_target.masked_fill_(action_mask_pad, 1e-7)
         # make the not so useful stuff 0
-        action_prob_target = action_prob_target.log() * (1 - action_mask_pad)
+        print("action_prob_target.log type: " + action_prob_target.log().type())
+        # print("action_mask_pad type: " + action_mask_pad.type('torch.FloatTensor')).type()
+        action_prob_target = action_prob_target.log() * (1 - action_mask_pad.type('torch.cuda.FloatTensor'))
 
         return torch.sum(action_prob_target, dim=0)  # B
 
@@ -444,7 +472,9 @@ class TranxParser(nn.Module):
         # batch is list of examples
         #         self.src_mask = self.get_token_mask(batch)
         self.T = max(len(e.tgt_actions) for e in batch)
-        self.sents = [self.process(e.sentence, self.vocab) for e in batch]
+        self.sents = [self.process(e.sentence) for e in batch]
+        # print("sents len: " + repr(len(self.sents)))
+        # self.sents = torch.cuda.LongTensor(self.sents)
         self.sent_lens = [len(s) for s in self.sents]
         self.S = max(self.sent_lens)
         print(self.T, self.S, self.sent_lens)
@@ -455,6 +485,9 @@ class TranxParser(nn.Module):
         #         return sents_sorted
         print(self.sents_sorted, self.sents_lens_sorted)
         self.src_mask = self.get_token_mask(self.sents_lens_sorted)
+        # self.sents_sorted = torch.cuda.LongTensor(self.sents_sorted)
+        # self.sents_lens_sorted = torch.cuda.LongTensor(self.sents_lens_sorted)
+
         encodings, final_states = self.encode(self.sents_sorted, self.sents_lens_sorted)
         s_att_vecs = self.decode(self.examples_sorted, self.src_mask, encodings, final_states)
         print("Finshed decode.")
@@ -462,6 +495,23 @@ class TranxParser(nn.Module):
         print("Finshed scoring.")
         return scores, final_states[0]
 
-    def process(self, sentence, vocab):
-        word_ids = [vocab.source[word] for word in sentence]
-        return torch.cuda.LongTensor(word_ids)
+    def process(self, sentence):
+        source = self.vocab.source
+        word_ids = [source.add(word) for word in sentence]
+        return word_ids
+
+    def save(self, path, saveGrammar):
+        dir_name = os.path.dirname(path)
+        if not os.path.exists(dir_name):
+            os.makedirs(dir_name)
+        if saveGrammar:
+            params = {
+                'transition_system': self.transition_system,
+                'vocab': self.vocab,
+                'state_dict': self.state_dict()
+            }
+        else:
+            params = {
+                'state_dict': self.state_dict()
+            }
+        torch.save(params, path)

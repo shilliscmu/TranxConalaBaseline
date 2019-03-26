@@ -15,7 +15,7 @@ def decode(examples, model, beam_size, verbose=False, **kwargs):
     decode_results = []
     count = 0
     for example in tqdm(examples, desc='Decoding', file=sys.stdout, total=len(examples)):
-        hyps = model.parse(example.src_sent, context=None, beam_size=beam_size)
+        hyps = model.parse(example.sentence, context=None, beam_size=beam_size)
         
         decoded_hyps = []
         for hyp_id, hyp in enumerate(hyps):
@@ -28,9 +28,9 @@ def decode(examples, model, beam_size, verbose=False, **kwargs):
                 if verbose:
                     print("Exception in converting tree to code:", file=sys.stdout)
                     print('-' * 60, file=sys.stdout)
-                    print('Example: %s\nIntent: %s\nTarget Code:\n%s\nHypothesis[%d]:\n%s' % (example.idx,
-                                                                                             ' '.join(example.src_sent),
-                                                                                             example.tgt_code,
+                    print('Example: %s\nIntent: %s\nTarget Code:\n%s\nHypothesis[%d]:\n%s' % (example.index,
+                                                                                             ' '.join(example.sentence),
+                                                                                             example.code,
                                                                                              hyp_id,
                                                                                              hyp.tree.to_string()), file=sys.stdout)
                     if got_code:
