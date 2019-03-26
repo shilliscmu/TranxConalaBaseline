@@ -6,7 +6,6 @@ import torch.optim as optim
 import torch.nn.utils.rnn as rnn_utils
 from transitions import ApplyRuleAction, ReduceAction
 
-
 SRC_EMB_SIZE = 128
 ACTION_EMB_SIZE = SRC_EMB_SIZE
 FIELD_EMB_SIZE = 64
@@ -28,8 +27,8 @@ class TranxParser(nn.Module):
         self.fields_emb = nn.Embedding(len(transition_system.grammar.fields), FIELD_EMB_SIZE)
 
         # encoder
-        self.encoder = nn.LSTM(input_size=SRC_EMB_SIZE, 
-                               hidden_size=LSTM_HIDDEN_DIM // 2, 
+        self.encoder = nn.LSTM(input_size=SRC_EMB_SIZE,
+                               hidden_size=LSTM_HIDDEN_DIM // 2,
                                num_layers=1,
                                bidirectional=True,
                                dropout=0.2,
@@ -38,7 +37,7 @@ class TranxParser(nn.Module):
         # decoder
         self.decoder_input_dim = ACTION_EMB_SIZE + FIELD_EMB_SIZE + LSTM_HIDDEN_DIM + ATT_SIZE
         self.decoder = nn.LSTMCell(input_size=self.decoder_input_dim, hidden_size=LSTM_HIDDEN_DIM)
-        
+
         self.lin_attn = nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM, bias=False)
         self.attention_vector_lin = nn.Linear(LSTM_HIDDEN_DIM * 2, ATT_SIZE, bias=False)
 
@@ -47,21 +46,19 @@ class TranxParser(nn.Module):
         self.applyconstrprob_lin = nn.Linear(ACTION_EMB_SIZE, ATT_SIZE, bias=False)
         self.attn_vec_to_action_emb = nn.Linear(ATT_SIZE, ACTION_EMB_SIZE, bias=False)
         self.gen_vs_copy_lin = nn.Linear(ATT_SIZE, 1)
-        
-        
-    def encode(self, sents, sent_lens): # done
+
+    def encode(self, sents, sent_lens):  # done
         # batch: 
         padded_sents = rnn_utils.pad_sequence(sents, batch_first=True)
-#         print(padded_sents)
+        #         print(padded_sents)
         embeddings = self.src_emb(padded_sents)
-        print(embeddings.shape) # B x T x embdim
+        print(embeddings.shape)  # B x T x embdim
         inputs = rnn_utils.pack_padded_sequence(embeddings, sent_lens, batch_first=True)
         encodings, final_state = self.encoder(inputs)
         encodings, lens = rnn_utils.pad_packed_sequence(encodings, batch_first=True)
-        print(encodings.shape) # B x T x hiddendim
+        print(encodings.shape)  # B x T x hiddendim
         return encodings, final_state
-    
-    
+
     def action_emb_from_action(self, action):
         if isinstance(action, ApplyRuleAction):
             action_emb = self.productions_emb.weight[self.grammar.prod2id[action.production]]
@@ -88,45 +85,44 @@ class TranxParser(nn.Module):
             action_embs_prev.append(action_emb)
             parent_states.append(states_sequence[parent_time_step][eid])
         return torch.stack(action_embs_prev), torch.stack(parent_states)
-    
+
     def get_token_mask(self, sent_lens):
         # returns mask:  B x S, 1 where entries are to be masked, 0 for valid ones
         mask = torch.zeros((len(sent_lens), self.S))
         for ei in range(len(sent_lens)):
             mask[ei, sent_lens[ei]:] = 1
-#         print(mask.byte())
+        #         print(mask.byte())
         return mask.byte()
-
 
     def s_attention(self, encodings, encodings_attn, src_mask, h):
         # encdoings: B x S x hiddendim, h: B x hiddendim
-        att_weight = torch.matmul(encodings_attn, h.unsqueeze(2)).squeeze(2) 
-#         print(att_weight.shape) # B x S
+        att_weight = torch.matmul(encodings_attn, h.unsqueeze(2)).squeeze(2)
+        #         print(att_weight.shape) # B x S
         # src_mask has 1 where pad, fill -inf there
         if src_mask is not None:
             att_weight.masked_fill_(src_mask, -float('inf'))
-#             print(att_weight, src_mask)
+        #             print(att_weight, src_mask)
         att_weight = F.softmax(att_weight, dim=1)
         batch_size, src_len = att_weight.shape
         ctx = torch.matmul(att_weight.view(batch_size, 1, src_len), encodings).squeeze(1)
-#         print(ctx.shape) # B x hiddendim
+        #         print(ctx.shape) # B x hiddendim
         # s_att_prev is not previous in this time step, but the next step
         s_att = F.tanh(self.attention_vector_lin(torch.cat([ctx, h], 1)))
         return s_att
-    
+
     def decode(self, batch, src_mask, encodings, final_state):
         print(src_mask.shape, 'mask')
         # produce attention vectors
         batch_size = len(batch)
         h, c = final_state
-#         print(h.shape)
+        #         print(h.shape)
         h, c = h.view(batch_size, -1), c.view(batch_size, -1)
-#         print(h.shape) B x hiddendim
-        
+        #         print(h.shape) B x hiddendim
+
         inp = torch.zeros(batch_size, self.decoder_input_dim)
         states_sequence, s_att_all = [], []
         encodings_attn = self.lin_attn(encodings)
-#         print(encodings_attn.shape) # same dim as encodings
+        #         print(encodings_attn.shape) # same dim as encodings
         for t in range(self.T):
             if t > 0:
                 # [act prev : ~s prev : pt]
@@ -135,26 +131,26 @@ class TranxParser(nn.Module):
                             e in batch]
                 nft = self.fields_emb(torch.Tensor(frontier))
                 inp = torch.cat([action_emb_prev, s_att_prev, nft, parent_states], dim=-1)
-            
+
             h, c = self.decoder(inp, (h, c))
             states_sequence.append(h)
 
             # compute the combined attention 
             s_att_prev = self.s_attention(encodings, encodings_attn, src_mask, h)
-#             print(s_att_prev.shape, "~s") # B x hiddendim
+            #             print(s_att_prev.shape, "~s") # B x hiddendim
             s_att_all.append(s_att_prev)
 
         s_att_all = torch.stack(s_att_all, dim=0)
-        return s_att_all  
-    
-    
+        return s_att_all
+
     def pointer_weights(self, encodings, src_mask, s_att_vecs):
         # to compute hWs. encodings: B x hiddendim, s_att_vecs: T x B x  attsize, ptr lin layer dimx -> attsize
-        hW = self.ptr_net_lin(encodings) # B x S x attsize
+        hW = self.ptr_net_lin(encodings)  # B x S x attsize
         if len(s_att_vecs.shape) == 2:
-            s_att_vecs.unsqueeze(0) # T = 1
-        scores = torch.matmul(s_att_vecs, hW.permute(0, 2, 1))  # hW is (B x S x attsize), s_att_vecs is (B x T x attsize|) or H x 1 x attsize
-        scores = scores.permute(1, 0, 2) # T x B x S
+            s_att_vecs.unsqueeze(0)  # T = 1
+        scores = torch.matmul(s_att_vecs, hW.permute(0, 2,
+                                                     1))  # hW is (B x S x attsize), s_att_vecs is (B x T x attsize|) or H x 1 x attsize
+        scores = scores.permute(1, 0, 2)  # T x B x S
         # src_mask is B x S
         if src_mask is not None:
             src_token_mask = src_mask.unsqueeze(0).expand_as(scores)
@@ -162,17 +158,17 @@ class TranxParser(nn.Module):
         scores = scores.permute(1, 0, 2)
         if len(s_att_vecs.shape) == 2:
             scores = scores.squeeze(1)
-        return F.softmax(scores, dim=-1) # B x T x S or H x S
+        return F.softmax(scores, dim=-1)  # B x T x S or H x S
 
     def get_action_prob(self, s_att_vecs, lin_layer, weight):
         # to compute aWs. s_att_vecs: T x B x  attsize, weight: |a| x embdim, Lin layer dimx -> attsize 
-        aW = lin_layer(weight.weight) # |a| x  attsize
+        aW = lin_layer(weight.weight)  # |a| x  attsize
         # aW is (|a| x  attsize), s_att_vecs is (T x B x  attsize)
-        scores = torch.matmul(s_att_vecs, aW.t())  
+        scores = torch.matmul(s_att_vecs, aW.t())
         if len(scores.shape) == 3:
-            scores = scores.permute(1, 0, 2) # B x T x |a| 
+            scores = scores.permute(1, 0, 2)  # B x T x |a|
         return F.softmax(scores, dim=-1)  # B x T x |a| 
-        
+
     def get_rule_masks(self, batch):
         is_applyconstr = torch.zeros((len(batch), self.T))
         is_gentoken = torch.zeros((len(batch), self.T))
@@ -208,8 +204,7 @@ class TranxParser(nn.Module):
                             is_gentoken[ei, t] = 1
 
         return is_applyconstr, is_gentoken, is_copy, applyconstr_ids, gentok_ids, is_copy_tok
-    
-      
+
     def compute_target_probabilities(self, encodings, s_att_vecs, src_mask, batch):
         # s_att_vecs is T x B x attsize
         is_applyconstr, is_gentoken, is_copy, applyconstr_ids, gentok_ids, is_copy_tok = self.get_rule_masks(batch)

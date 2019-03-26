@@ -1,6 +1,7 @@
 import ast
 import json
 import re
+import torch
 
 import astor
 import numpy as np
@@ -12,8 +13,20 @@ from action_info import get_action_infos
 from vocab import Vocab, VocabEntry
 
 class PreProcessor(object):
-    @staticmethod
-    def preprocess_dataset(file_path, transition_system):
+    def __init__(self):
+        self.token_to_index = {}
+
+    def index_sentence(self, sentence):
+        indexed_sentence = []
+        for word in sentence:
+            if word in self.token_to_index:
+                indexed_sentence.append(self.token_to_index[word])
+            else:
+                self.token_to_index[word] = len(self.token_to_index)
+                indexed_sentence.append(self.token_to_index[word])
+        return indexed_sentence
+
+    def preprocess_dataset(self, file_path, transition_system):
         dataset = json.load(open(file_path))
         examples = []
         for i, example_json in enumerate(dataset):
@@ -24,15 +37,16 @@ class PreProcessor(object):
             tgt_ast = transition_system.python_ast_to_asdl_ast(python_ast, transition_system.grammar)
             tgt_actions = transition_system.get_actions(tgt_ast)
             tgt_action_infos = get_action_infos(example_dict['intent_tokens'], tgt_actions)
+            token_ids = torch.tensor(self.index_sentence(example_dict['intent_tokens']))
 
             example = Example(index=f'{i}-{example_json["question_id"]}',
                           sentence=example_dict['intent_tokens'],
-                          actions=tgt_action_infos,
+                              src_token_ids=token_ids,
+                          tgt_actions=tgt_action_infos,
                           code=canonical_code,
                           ast=tgt_ast,
                           info=dict(example_dict=example_json,
                                     slot_map=example_dict['slot_map']))
-
             examples.append(example)
 
         return examples
@@ -60,21 +74,19 @@ class PreProcessor(object):
         'slot_map': slot_map,
         'canonical_snippet': canonical_snippet}
 
-
-    @staticmethod
-    def get_train_and_dev(train_file_path, grammar_file, primitive_types):
+    def get_train_and_dev(self, train_file_path, grammar_file, primitive_types):
         src_freq = 3
         code_freq = 3
         grammar = ASDLGrammar.grammar_from_text(open(grammar_file).read(), primitive_types)
         transition_system = TransitionSystem(grammar)
-        train_examples = PreProcessor.preprocess_dataset(train_file_path, transition_system)
+        train_examples = self.preprocess_dataset(train_file_path, transition_system)
 
         full_train_examples = train_examples[:]
         np.random.shuffle(train_examples)
         dev_examples = train_examples[:200]
         train_examples = train_examples[200:]
 
-        src_vocab = VocabEntry.from_corpus([e.src_sent for e in train_examples], size=5000,
+        src_vocab = VocabEntry.from_corpus([e.sentence for e in train_examples], size=5000,
                                        freq_cutoff=src_freq)
         primitive_tokens = [map(lambda a: a.action.token,
                                 filter(lambda a: isinstance(a.action, GenTokenAction), e.tgt_actions))
@@ -82,15 +94,14 @@ class PreProcessor(object):
         primitive_vocab = VocabEntry.from_corpus(primitive_tokens, size=5000, freq_cutoff=code_freq)
 
         # generate vocabulary for the code tokens!
-        code_tokens = [transition_system.tokenize_code(e.tgt_code, mode='decoder') for e in train_examples]
+        code_tokens = [transition_system.tokenize_code(e.code, mode='decoder') for e in train_examples]
         code_vocab = VocabEntry.from_corpus(code_tokens, size=5000, freq_cutoff=code_freq)
 
         vocab = Vocab(source=src_vocab, primitive=primitive_vocab, code=code_vocab)
 
         return train_examples, dev_examples, vocab
 
-    @staticmethod
-    def get_test(test_file_path, grammar_file, primitive_types):
+    def get_test(self, test_file_path, grammar_file, primitive_types):
         grammar = ASDLGrammar.grammar_from_text(open(grammar_file).read(), primitive_types)
         transition_system = TransitionSystem(grammar)
         test_examples = PreProcessor.preprocess_dataset(test_file_path, transition_system)
@@ -98,10 +109,11 @@ class PreProcessor(object):
 
 
 class Example(object):
-    def __init__(self, index, sentence, actions, code, ast, info):
+    def __init__(self, index, sentence, src_token_ids, tgt_actions, code, ast, info):
         self.index = index
         self.sentence = sentence
-        self.actions = actions
+        self.src_token_ids = src_token_ids
+        self.tgt_actions = tgt_actions
         self.code = code
         self.ast = ast
         self.info = info

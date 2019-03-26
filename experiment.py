@@ -41,12 +41,13 @@ def batch_iter(data, batch_size, shuffle=False):
     for batch_id in range(batch_num):
         batch_ids = index_arr[batch_size * batch_id: batch_size * (batch_id + 1)]
         batch_examples = [data[i] for i in batch_ids]
-        batch_examples.sort(key=lambda e: -len(e.src_sent))
+        batch_examples.sort(key=lambda e: -len(e.sentence))
 
         yield batch_examples
 
 def train(train_file_path):
-    train_data, dev_data, vocab = PreProcessor.get_train_and_dev(train_file_path, GRAMMAR_FILE, PRIMITIVE_TYPES)
+    preprocessor = PreProcessor()
+    train_data, dev_data, vocab = preprocessor.get_train_and_dev(train_file_path, GRAMMAR_FILE, PRIMITIVE_TYPES)
 
     grammar = ASDLGrammar.grammar_from_text(open(GRAMMAR_FILE).read(), PRIMITIVE_TYPES)
     transition_system = TransitionSystem(grammar)
