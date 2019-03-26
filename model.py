@@ -3,8 +3,13 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from torch.autograd import Variable
+from collections import OrderedDict
 import torch.nn.utils.rnn as rnn_utils
-from transitions import ApplyRuleAction, ReduceAction
+
+from action_info import ActionInfo
+from hypothesis import Hypothesis
+from transitions import ApplyRuleAction, ReduceAction, GenTokenAction
 
 SRC_EMB_SIZE = 128
 ACTION_EMB_SIZE = SRC_EMB_SIZE
@@ -38,6 +43,7 @@ class TranxParser(nn.Module):
         self.decoder_input_dim = ACTION_EMB_SIZE + FIELD_EMB_SIZE + LSTM_HIDDEN_DIM + ATT_SIZE
         self.decoder = nn.LSTMCell(input_size=self.decoder_input_dim, hidden_size=LSTM_HIDDEN_DIM)
 
+        #source_encodings_attention_linear_layer
         self.lin_attn = nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM, bias=False)
         self.attention_vector_lin = nn.Linear(LSTM_HIDDEN_DIM * 2, ATT_SIZE, bias=False)
 
@@ -47,13 +53,195 @@ class TranxParser(nn.Module):
         self.attn_vec_to_action_emb = nn.Linear(ATT_SIZE, ACTION_EMB_SIZE, bias=False)
         self.gen_vs_copy_lin = nn.Linear(ATT_SIZE, 1)
 
+    def parse(self, sentence, context=None, beam_size=5):
+        primitive_vocab = self.vocab.primitive
+        processed_sentence = self.process([sentence], self.vocab.source)
+        source_encodings, (last_encoder_state, last_encoder_cell) = self.encode(processed_sentence, [len(sentence)])
+        self.decoder_cell_initializer_linear_layer = nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM)
+        h_t1 = F.tanh(self.decoder_cell_initializer_linear_layer(last_encoder_cell))
+
+        hypothesis_scores = Variable(torch.cuda.FloatTensor([0.]), volatile=True)
+        source_token_positions_by_token = OrderedDict()
+        for token_position, token in enumerate(sentence):
+            source_token_positions_by_token.setdefault(token, []).append(token_position)
+        t = 0
+        hypotheses = [Hypothesis()]
+        hypotheses_states = [[]]
+        finished_hypotheses = []
+
+        while len(finished_hypotheses) < 15 and t < 100:
+            num_of_hypotheses = len(hypotheses)
+            expanded_source_encodings = source_encodings.expand(num_of_hypotheses, source_encodings.size(1),
+                                                                source_encodings.size(2))
+            expanded_source_encodings_attention_linear_layer = self.lin_attn.expand(
+                num_of_hypotheses, self.lin_attn.size(1), self.lin_attn.size(2))
+            if t == 0:
+                x = Variable(torch.cuda.FloatTensor(1, 128).zero_(), volatile=True)
+            else:
+                actions = [h.actions[-1] for h in hypotheses]
+                action_embeddings = []
+                for action in actions:
+                    if action:
+                        action_embeddings.append(self.action_emb_from_action(action))
+                    else:
+                        action_embeddings.append(Variable(torch.cuda.FloatTensor(128).zero_()))
+                action_embeddings = torch.stack(action_embeddings)
+                encoder_inputs = [action_embeddings]
+                encoder_inputs.append(att_t1)
+
+                frontier_fields = [h.frontier_field.field for h in hypotheses]
+                frontier_field_embeddings = self.fields_emb(
+                    Variable(torch.cuda.FloatTensor([self.grammar.field_to_id[f] for f in frontier_fields])))
+                encoder_inputs.append(frontier_field_embeddings)
+
+                parent_created_times = [h.frontier_node.created_time for h in hypotheses]
+                parent_states = torch.stack(
+                    [hypotheses_states[h_id][parent_created_time][0]] for h_id, parent_created_time in
+                    enumerate(parent_created_times))
+                parent_cells = torch.stack(
+                    [hypotheses_states[h_id][parent_created_time][1] for h_id, parent_created_time in
+                     enumerate(parent_created_times)])
+                encoder_inputs.append(parent_states)
+
+                x = torch.cat(encoder_inputs, dim=-1)
+            (h_t, cell), attention = self.step(x, h_t1, expanded_source_encodings, expanded_source_encodings_attention_linear_layer)
+            log_p_of_each_apply_rule_action = F.log_softmax(self.production_prediction(attention), dim=-1)
+            p_of_generating_each_primitive_in_vocab = F.softmax(self.primitive_prediction(attention), dim=-1)
+            p_of_copying_from_source_sentence = self.ptr_net_lin(source_encodings, None, attention.unsqueeze(0).squeeze(0))
+            p_of_making_primitive_prediction = F.softmax(self.gen_vs_copy_lin(attention), dim=-1)
+            p_of_each_primitive = p_of_making_primitive_prediction[:, 0].unsqueeze(1) * p_of_generating_each_primitive_in_vocab
+
+            hypothesis_ids_for_which_we_gentoken = []
+            hypothesis_unknowns_resulting_from_gentoken = []
+            hypothesis_ids_for_which_we_applyrule = []
+            hypothesis_production_ids_resulting_from_applyrule_actions = []
+            hypothesis_scores_resulting_from_applyrule_actions = []
+
+            for hypothesis_id, hypothesis in enumerate(hypotheses):
+                action_types = self.transition_sys.get_valid_continuation_types(hypothesis)
+                for action_type in action_types:
+                    if action_type == ApplyRuleAction:
+                        productions = self.transition_sys.get_valid_continuating_productions(hypothesis)
+                        for production in productions:
+                            production_id = self.grammar.production_to_id[production]
+                            hypothesis_production_ids_resulting_from_applyrule_actions.append(production_id)
+                            production_score = log_p_of_each_apply_rule_action[hypothesis_id, production_id].data[0]
+                            new_hypothesis_score = hypothesis.score + production_score
+                            hypothesis_scores_resulting_from_applyrule_actions.append(new_hypothesis_score)
+                            hypothesis_ids_for_which_we_applyrule.append(hypothesis_id)
+                    elif action_type == ReduceAction:
+                        reduce_score = log_p_of_each_apply_rule_action[hypothesis_id, len(self.grammar)].data[0]
+                        new_hypothesis_score = hypothesis.score + reduce_score
+                        hypothesis_scores_resulting_from_applyrule_actions.append(new_hypothesis_score)
+                        hypothesis_production_ids_resulting_from_applyrule_actions.append(len(self.grammar))
+                        hypothesis_ids_for_which_we_applyrule.append(hypothesis_id)
+                    else:
+                        hypothesis_ids_for_which_we_gentoken.append(hypothesis_id)
+                        hypothesis_copy_probabilities_by_token = dict()
+                        copied_unks_info = []
+                        for token, token_positions in source_token_positions_by_token.items():
+                            total_copy_prob = torch.gather(p_of_copying_from_source_sentence[hypothesis_id], 0, Variable(torch.cuda.LongTensor(token_positions))).sum()
+                            p_of_making_copy = p_of_making_primitive_prediction[hypothesis_id, 1] * total_copy_prob
+                            if token in primitive_vocab:
+                                token_id = primitive_vocab[token]
+                                p_of_each_primitive[hypothesis_id, token_id] = p_of_each_primitive[hypothesis_id, token_id] + p_of_making_copy
+                                hypothesis_copy_probabilities_by_token[token] = (token_positions, p_of_making_copy.data[0])
+                            else:
+                                copied_unks_info.append({'token': token, 'token_positions': token_positions, 'copy_prob': p_of_making_copy.data[0]})
+                        if len(copied_unks_info) > 0:
+                            copied_unk = np.array([unk['copy_prob'] for unk in copied_unks_info]).argmax()
+                            copied_token = copied_unks_info[copied_unk]['token']
+                            p_of_each_primitive[hypothesis_id, primitive_vocab.unk_id] = copied_unks_info[copied_unk]['copy_prob']
+                            hypothesis_unknowns_resulting_from_gentoken.append(copied_token)
+                            hypothesis_copy_probabilities_by_token[copied_token] = (copied_unks_info[copied_unk]['token_positions'], copied_unks_info[copied_unk]['copy_prob'])
+
+            new_hypothesis_scores = None
+            if hypothesis_scores_resulting_from_applyrule_actions:
+                new_hypothesis_scores = Variable(torch.cuda.FloatTensor(hypothesis_scores_resulting_from_applyrule_actions))
+            if hypothesis_ids_for_which_we_gentoken:
+                log_p_of_each_primitive = torch.log(p_of_each_primitive)
+                gen_token_new_hypothesis_scores = (hypothesis_scores[hypothesis_ids_for_which_we_gentoken].unsqueeze(1) + log_p_of_each_primitive[hypothesis_ids_for_which_we_gentoken, :]).view(-1)
+
+                if new_hypothesis_scores is None:
+                    new_hypothesis_scores = gen_token_new_hypothesis_scores
+                else:
+                    new_hypothesis_scores = torch.cat([new_hypothesis_scores, gen_token_new_hypothesis_scores])
+            top_new_hypothesis_scores, top_new_hypothesis_positions = torch.topk(new_hypothesis_scores, k=min(new_hypothesis_scores.size(0), 15 - len(finished_hypotheses)))
+
+            working_hypothesis_ids = []
+            new_hypotheses = []
+            for new_hypothesis_score, new_hypothesis_position in zip(top_new_hypothesis_scores.data.cpu(), top_new_hypothesis_positions.data.cpu()):
+                action_info = ActionInfo()
+                if new_hypothesis_position < len(hypothesis_scores_resulting_from_applyrule_actions):
+                    previous_hypothesis_id = hypothesis_ids_for_which_we_applyrule[new_hypothesis_position]
+                    previous_hypothesis = hypotheses[previous_hypothesis_id]
+                    production_id = hypothesis_scores_resulting_from_applyrule_actions[new_hypothesis_position]
+                    if production_id < len(self.grammar):
+                        apply_production = self.grammar.id_to_production[production_id]
+                        action = ApplyRuleAction(apply_production)
+                    else:
+                        action = ReduceAction()
+                else:
+                    token_id = (new_hypothesis_position - len(hypothesis_scores_resulting_from_applyrule_actions)) % p_of_each_primitive.size(1)
+                    previous_hypothesis_id = hypothesis_ids_for_which_we_gentoken[(new_hypothesis_position - len(hypothesis_scores_resulting_from_applyrule_actions)) // p_of_each_primitive.size(1)]
+                    previous_hypothesis = hypotheses[previous_hypothesis_id]
+                    if token_id == primitive_vocab.unk_id:
+                        if hypothesis_unknowns_resulting_from_gentoken:
+                            token = hypothesis_unknowns_resulting_from_gentoken[(new_hypothesis_position - len(hypothesis_scores_resulting_from_applyrule_actions)) // p_of_each_primitive.size(1)]
+                        else:
+                            token = primitive_vocab.id_to_word[primitive_vocab.unk_id]
+                    else:
+                        token = primitive_vocab.id_2_word[token_id]
+                    action = GenTokenAction(token)
+
+                    if token in source_token_positions_by_token:
+                        action_info.copy_from_src = True
+                        action_info.src_token_position = source_token_positions_by_token[token]
+
+                action_info.action = action
+                action_info.t = t
+                if t > 0:
+                    action_info.parent_t = previous_hypothesis.frontier_node.created_time
+                    action_info.frontier_prod = previous_hypothesis.frontier_node.production
+                    action_info.frontier_field = previous_hypothesis.frontier_field.field
+                new_hypothesis = previous_hypothesis.clone_and_apply_action_info(action_info)
+                new_hypothesis.score = new_hypothesis_score
+
+                if new_hypothesis.completed:
+                    finished_hypotheses.append(new_hypothesis)
+                else:
+                    new_hypotheses.append(new_hypothesis)
+                    working_hypothesis_ids.append(previous_hypothesis_id)
+            if working_hypothesis_ids:
+                hypothesis_states = [hypothesis_states[i] + [(h_t[i], cell[i])] for i in working_hypothesis_ids]
+                h_t1 = (h_t[working_hypothesis_ids], cell[working_hypothesis_ids])
+                att_t1 = attention[working_hypothesis_ids]
+                hypotheses = new_hypotheses
+                hypothesis_scores = Variable(torch.cuda.FloatTensor([hyp.score for hyp in hypotheses]))
+                t += 1
+            else:
+                break
+
+        finished_hypotheses.sort(key=lambda hyp: -hyp.score)
+        return finished_hypotheses
+
+    def step(self, x, h_t1, expanded_source_encodings, expanded_source_encodings_attention_linear_layer):
+        h_t, cell_t = self.decoder(x, h_t1)
+        context_t = self.s_attention(expanded_source_encodings, expanded_source_encodings_attention_linear_layer, )
+        attention = F.tanh(self.attention_vector_lin(torch.cat([h_t, context_t], 1)))
+        attention = self.dropout(attention)
+        return (h_t, cell_t), attention
+
     def encode(self, sents, sent_lens):  # done
         # batch: 
         padded_sents = rnn_utils.pad_sequence(sents, batch_first=True)
         #         print(padded_sents)
+        print("About to embed source sentences.")
         embeddings = self.src_emb(padded_sents)
         print(embeddings.shape)  # B x T x embdim
+        print("About to pad embedded sentences.")
         inputs = rnn_utils.pack_padded_sequence(embeddings, sent_lens, batch_first=True)
+        print("About to encode embedded sentences.")
         encodings, final_state = self.encoder(inputs)
         encodings, lens = rnn_utils.pad_packed_sequence(encodings, batch_first=True)
         print(encodings.shape)  # B x T x hiddendim
@@ -83,6 +271,10 @@ class TranxParser(nn.Module):
                 action_emb = zeros_emb
                 parent_time_step = 0
             action_embs_prev.append(action_emb)
+            # TODO: encoder_inputs.append(att_t1)
+            # TODO: frontier_fields = [h.frontier_field.field for h in hypotheses]
+            #                 frontier_field_embeddings = self.fields_emb(Variable(torch.cuda.FloatTensor([self.grammar.field_to_id[f] for f in frontier_fields])))
+            #                 encoder_inputs.append(frontier_field_embeddings)
             parent_states.append(states_sequence[parent_time_step][eid])
         return torch.stack(action_embs_prev), torch.stack(parent_states)
 
@@ -132,9 +324,11 @@ class TranxParser(nn.Module):
                 nft = self.fields_emb(torch.Tensor(frontier))
                 inp = torch.cat([action_emb_prev, s_att_prev, nft, parent_states], dim=-1)
 
+            print("cat'd previous action embeddings.")
             h, c = self.decoder(inp, (h, c))
             states_sequence.append(h)
 
+            print("computed combined attention.")
             # compute the combined attention 
             s_att_prev = self.s_attention(encodings, encodings_attn, src_mask, h)
             #             print(s_att_prev.shape, "~s") # B x hiddendim
@@ -244,7 +438,7 @@ class TranxParser(nn.Module):
         # batch is list of examples
         #         self.src_mask = self.get_token_mask(batch)
         self.T = max(len(e.tgt_actions) for e in batch)
-        self.sents = [e.src_token_ids for e in batch]
+        self.sents = [self.process(e.sentence, self.vocab) for e in batch]
         self.sent_lens = [len(s) for s in self.sents]
         self.S = max(self.sent_lens)
         print(self.T, self.S, self.sent_lens)
@@ -259,3 +453,7 @@ class TranxParser(nn.Module):
         s_att_vecs = self.decode(self.examples_sorted, self.src_mask, encodings, final_states)
         scores = self.compute_target_probabilities(encodings, s_att_vecs, self.src_mask, self.examples_sorted)
         return scores, final_states[0]
+
+    def process(self, sentence, vocab):
+        word_ids = [vocab.source[word] for word in sentence]
+        return torch.cuda.LongTensor(word_ids)

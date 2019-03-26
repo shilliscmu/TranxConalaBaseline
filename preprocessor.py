@@ -16,16 +16,6 @@ class PreProcessor(object):
     def __init__(self):
         self.token_to_index = {}
 
-    def index_sentence(self, sentence):
-        indexed_sentence = []
-        for word in sentence:
-            if word in self.token_to_index:
-                indexed_sentence.append(self.token_to_index[word])
-            else:
-                self.token_to_index[word] = len(self.token_to_index)
-                indexed_sentence.append(self.token_to_index[word])
-        return indexed_sentence
-
     def preprocess_dataset(self, file_path, transition_system):
         dataset = json.load(open(file_path))
         examples = []
@@ -37,11 +27,9 @@ class PreProcessor(object):
             tgt_ast = transition_system.python_ast_to_asdl_ast(python_ast, transition_system.grammar)
             tgt_actions = transition_system.get_actions(tgt_ast)
             tgt_action_infos = get_action_infos(example_dict['intent_tokens'], tgt_actions)
-            token_ids = torch.tensor(self.index_sentence(example_dict['intent_tokens']))
 
             example = Example(index=f'{i}-{example_json["question_id"]}',
                           sentence=example_dict['intent_tokens'],
-                              src_token_ids=token_ids,
                           tgt_actions=tgt_action_infos,
                           code=canonical_code,
                           ast=tgt_ast,
@@ -109,10 +97,9 @@ class PreProcessor(object):
 
 
 class Example(object):
-    def __init__(self, index, sentence, src_token_ids, tgt_actions, code, ast, info):
+    def __init__(self, index, sentence, tgt_actions, code, ast, info):
         self.index = index
         self.sentence = sentence
-        self.src_token_ids = src_token_ids
         self.tgt_actions = tgt_actions
         self.code = code
         self.ast = ast
