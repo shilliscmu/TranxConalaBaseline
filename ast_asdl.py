@@ -16,7 +16,7 @@ class AbstractSyntaxTree(object):
             for field in realized_fields:
                 self.add_child(field)
         else:
-            for field in self.production.fields:
+            for field in self.production.fields():
                 self.add_child(RealizedField(field))
 
     def __getitem__(self, field_name):
@@ -116,7 +116,7 @@ class RealizedField(Field):
         self.parent_node = None
         self.field = field
         if self.card == 'multiple':
-            self.vlaue = []
+            self.value = []
             if value is not None:
                 for child_node in value:
                     self.add_value(child_node)

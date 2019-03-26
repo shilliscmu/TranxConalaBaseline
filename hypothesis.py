@@ -75,7 +75,7 @@ class Hypothesis(object):
                             result = find_frontier_node_and_field(child)
                             if result:
                                 return result
-                    if not field.finished:
+                    if not field.is_finished():
                         return tree_node, field
                 return None
             else:

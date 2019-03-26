@@ -1,5 +1,8 @@
 import json
+import pickle
 import sys
+import time
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -16,7 +19,7 @@ LR_DECAY = 0.5
 DECAY_LR_AFTER_EPOCH = 15
 BATCH_SIZE = 10
 MAX_EPOCH = 50
-GRAMMAR_FILE = "py3_asdl.simplified.txt"
+GRAMMAR_FILE = "py3_asdl.txt"
 PRIMITIVE_TYPES = ["identifier", "int", "string", "bytes", "object", "singleton"]
 BEAM_SIZE = 15
 PATIENCE = 5
@@ -173,7 +176,7 @@ def train(train_file_path):
             patience = 0
 
 def test(test_file_path, model_path):
-    test_data = PreProcessor.get_test(test_file_path)
+    test_data = PreProcessor.get_test(test_file_path, GRAMMAR_FILE, PRIMITIVE_TYPES)
     print('load model from [%s]' % model_path,)
     params = torch.load(model_path, map_location=lambda storage, loc: storage)
     transition_system = params['transition_system']
@@ -197,8 +200,11 @@ if __name__ == '__main__':
     model_path = ""
 
     if sys.argv[1] == 'train':
+        train_file_path = sys.argv[2]
         train(train_file_path)
     elif sys.argv[1] == 'test':
+        test_file_path = sys.argv[2]
+        model_path = sys.argv[3]
         test(test_file_path, model_path)
     else:
         raise RuntimeError('unknown mode')

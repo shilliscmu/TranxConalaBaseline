@@ -21,6 +21,12 @@ class ASDLGrammar(object):
         self.root_type = productions[0].type
         # num of constructors
         self.size = sum(len(head) for head in self.productions.values())
+
+        self.productions = self.get_productions()
+        self.types = self.get_types()
+        self.fields = self.get_fields()
+        self.composite_types = self.get_composite_types()
+        self.primitive_types = self.get_primitives_types()
         
         # mappings of entities to ids
         self.production_to_id = {p: index for index, p in enumerate(self.productions)}
@@ -41,32 +47,38 @@ class ASDLGrammar(object):
             return self.productions[datum]
 
     # get a list of all production values
-    def productions(self):
-        return sorted(chain.from_iterable(self.productions.values()), key=lambda x: repr(x))
+    def get_productions(self):
+        productions = sorted(chain.from_iterable(self.productions.values()), key=lambda x: repr(x))
+        return productions
+
+    def get_productions_by_constructor_name(self, constructor_name):
+        return self.constructor_production_map[constructor_name]
 
     # get a set of all types used in productions
-    def types(self):
+    def get_types(self):
         types = set()
-        for p in self.productions():
+        for p in self.productions:
             types.add(p.type)
             types.update(map(lambda x: x.type, p.constructor.fields))
-        self.types = sorted(types, key=lambda x: x.name)
-        return self.types
+        types = sorted(types, key=lambda x: x.name)
+        return types
 
     # get a set of all fields used in productions
-    def fields(self):
+    def get_fields(self):
         fields = set()
-        for p in self.productions():
+        for p in self.productions:
             fields.update(p.constructor.fields)
-        self.fields = sorted(fields, key=lambda x: (x.name, x.type.name, x.cardinality))
-        return self.fields
+        fields = sorted(fields, key=lambda x: (x.name, x.type.name, x.card))
+        return fields
 
     # filter out the primitive types from all the types
-    def primitives(self):
-        return filter(lambda x: isinstance(x, ASDLPrimitiveType), self.types)
+    def get_primitives_types(self):
+        primitive_types = filter(lambda x: isinstance(x, ASDLPrimitiveType), self.types)
+        return primitive_types
 
-    def composites(self):
-        return filter(lambda x: isinstance(x, ASDLCompositeType), self.types)
+    def get_composite_types(self):
+        composite_types = filter(lambda x: isinstance(x, ASDLCompositeType), self.types)
+        return composite_types
 
     def is_composite_type(self, asdl_type):
         return asdl_type in self.composite_types
@@ -89,9 +101,9 @@ class ASDLGrammar(object):
                 card = 'optional'
 
             if type in primitive_types:
-                return Field(name, ASDLPrimitiveType(type), cardinality=card)
+                return Field(name, ASDLPrimitiveType(type), card=card)
             else:
-                return Field(name, ASDLCompositeType(type), cardinality=card)
+                return Field(name, ASDLCompositeType(type), card=card)
 
         def get_constructor_from_text(text):
             text = text.strip()
@@ -142,7 +154,7 @@ class ASDLGrammar(object):
 
             constructors = map(get_constructor_from_text, constructors_blocks)
 
-            productions = list(map(lambda x: ASDLProduction(new_type, x)), constructors)
+            productions = list(map(lambda x: ASDLProduction(new_type, x), constructors))
             all_productions.extend(productions)
 
             line_num = index

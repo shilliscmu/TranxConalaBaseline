@@ -6,7 +6,7 @@ import itertools
 import re
 import ast
 import astor
-import nltk
+from nltk import word_tokenize
 
 
 QUOTED_TOKEN_RE = re.compile(r"(?P<quote>''|[`'\"])(?P<string>.*?)(?P=quote)")
@@ -31,7 +31,7 @@ def compare_ast(node1, node2):
 
 def tokenize_intent(intent):
     lower_intent = intent.lower()
-    tokens = nltk.word_tokenize(lower_intent)
+    tokens = word_tokenize(lower_intent)
 
     return tokens
 
@@ -118,7 +118,10 @@ def canonicalize_code(code, slot_map):
     py_ast = ast.parse(code)
     replace_identifiers_in_ast(py_ast, string2slot)
     canonical_code = astor.to_source(py_ast).strip()
+    canonical_code = account_for_entries_that_are_lists(canonical_code, slot_map)
+    return canonical_code
 
+def account_for_entries_that_are_lists(canonical_code, slot_map):
     # the following code handles the special case that
     # a list/dict/set mentioned in the intent, like
     # Intent: zip two lists `[1, 2]` and `[3, 4]` into a list of two tuples containing elements at the same index in each list
@@ -128,7 +131,7 @@ def canonicalize_code(code, slot_map):
     if entries_that_are_lists:
         for slot_name in entries_that_are_lists:
             list_repr = slot_map[slot_name]['value']
-            #if list_repr[0] == '[' and list_repr[-1] == ']':
+            # if list_repr[0] == '[' and list_repr[-1] == ']':
             first_token = list_repr[0]  # e.g. `[`
             last_token = list_repr[-1]  # e.g., `]`
             fake_list = first_token + slot_name + last_token
@@ -137,7 +140,6 @@ def canonicalize_code(code, slot_map):
             #     fake_list = slot_name
 
             canonical_code = canonical_code.replace(list_repr, fake_list)
-
     return canonical_code
 
 
