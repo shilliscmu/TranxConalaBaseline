@@ -1,10 +1,11 @@
+import os
 import torch
 import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.nn.utils.rnn as rnn_utils
-from asdl.transition_system import ApplyRuleAction, ReduceAction
+from transitions import ApplyRuleAction, ReduceAction
 
 
 SRC_EMB_SIZE = 128
@@ -253,3 +254,34 @@ class TranxParser(nn.Module):
         s_att_vecs = self.decode(self.examples_sorted, self.src_mask, encodings, final_states)
         scores = self.compute_target_probabilities(encodings, s_att_vecs, self.src_mask, self.examples_sorted)
         return scores, final_states[0]
+
+    def save(self, path):
+        dir_name = os.path.dirname(path)
+        if not os.path.exists(dir_name):
+            os.makedirs(dir_name)
+
+        params = {
+            'transition_system': self.transition_system,
+            'vocab': self.vocab,
+            'state_dict': self.state_dict()
+        }
+        torch.save(params, path)
+
+    @classmethod
+    def load(cls, model_path):
+        params = torch.load(model_path, map_location=lambda storage, loc: storage)
+        vocab = params['vocab']
+        transition_system = params['transition_system']
+        # update saved args
+        saved_state = params['state_dict']
+        saved_args.cuda = cuda
+
+        parser = cls(vocab, transition_system)
+
+        parser.load_state_dict(saved_state)
+
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        parser.to(device)
+        parser.eval()
+
+        return parser

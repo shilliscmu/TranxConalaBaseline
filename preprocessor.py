@@ -8,6 +8,16 @@ from dataset_util import *
 from action_info import get_action_infos
 from vocab import Vocab, VocabEntry
 
+class Example(object):
+    def __init__(self, src_sent, tgt_actions, tgt_code, tgt_ast, idx=0, meta=None):
+        self.src_sent = src_sent
+        self.tgt_code = tgt_code
+        self.tgt_ast = tgt_ast
+        self.tgt_actions = tgt_actions
+
+        self.idx = idx
+        self.meta = meta
+
 class PreProcessor(object):
     def preprocess_dataset(file_path):
         dataset = json.load(open(file_path))
@@ -75,7 +85,6 @@ class PreProcessor(object):
                             for e in train_examples]
         primitive_vocab = VocabEntry.from_corpus(primitive_tokens, size=5000, freq_cutoff=code_freq)
 
-        # generate vocabulary for the code tokens!
         code_tokens = [transition_system.tokenize_code(e.tgt_code, mode='decoder') for e in train_examples]
         code_vocab = VocabEntry.from_corpus(code_tokens, size=5000, freq_cutoff=code_freq)
 
