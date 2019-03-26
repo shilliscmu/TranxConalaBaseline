@@ -24,6 +24,7 @@ class TranxParser(nn.Module):
         super().__init__()
         self.vocab = vocab
         self.transition_system = transition_system
+        self.grammar = self.transition_system.grammar
         # embeddings:
         # src text
         self.src_emb = nn.Embedding(len(vocab.source), SRC_EMB_SIZE, padding_idx=0)
@@ -58,7 +59,7 @@ class TranxParser(nn.Module):
         processed_sentence = self.process([sentence], self.vocab.source)
         source_encodings, (last_encoder_state, last_encoder_cell) = self.encode(processed_sentence, [len(sentence)])
         self.decoder_cell_initializer_linear_layer = nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM)
-        h_t1 = F.tanh(self.decoder_cell_initializer_linear_layer(last_encoder_cell))
+        h_t1 = torch.tanh(self.decoder_cell_initializer_linear_layer(last_encoder_cell))
 
         hypothesis_scores = Variable(torch.cuda.FloatTensor([0.]), volatile=True)
         source_token_positions_by_token = OrderedDict()
@@ -228,7 +229,7 @@ class TranxParser(nn.Module):
     def step(self, x, h_t1, expanded_source_encodings, expanded_source_encodings_attention_linear_layer):
         h_t, cell_t = self.decoder(x, h_t1)
         context_t = self.s_attention(expanded_source_encodings, expanded_source_encodings_attention_linear_layer, )
-        attention = F.tanh(self.attention_vector_lin(torch.cat([h_t, context_t], 1)))
+        attention = torch.tanh(self.attention_vector_lin(torch.cat([h_t, context_t], 1)))
         attention = self.dropout(attention)
         return (h_t, cell_t), attention
 
@@ -249,7 +250,7 @@ class TranxParser(nn.Module):
 
     def action_emb_from_action(self, action):
         if isinstance(action, ApplyRuleAction):
-            action_emb = self.productions_emb.weight[self.grammar.prod2id[action.production]]
+            action_emb = self.productions_emb.weight[self.grammar.production_to_id[action.production]]
         elif isinstance(action, ReduceAction):
             action_emb = self.productions_emb.weight[len(self.grammar)]
         else:
@@ -299,7 +300,7 @@ class TranxParser(nn.Module):
         ctx = torch.matmul(att_weight.view(batch_size, 1, src_len), encodings).squeeze(1)
         #         print(ctx.shape) # B x hiddendim
         # s_att_prev is not previous in this time step, but the next step
-        s_att = F.tanh(self.attention_vector_lin(torch.cat([ctx, h], 1)))
+        s_att = torch.tanh(self.attention_vector_lin(torch.cat([ctx, h], 1)))
         return s_att
 
     def decode(self, batch, src_mask, encodings, final_state):
@@ -319,17 +320,22 @@ class TranxParser(nn.Module):
             if t > 0:
                 # [act prev : ~s prev : pt]
                 action_emb_prev, parent_states = self.get_prev_action_embs(batch, t, states_sequence)
-                frontier = [self.grammar.field2id[e.tgt_actions[t].frontier_field] if t < len(e.tgt_actions) else 0 for
+                frontier = [self.grammar.field_to_id[e.tgt_actions[t].frontier_field] if t < len(e.tgt_actions) else 0 for
                             e in batch]
                 nft = self.fields_emb(torch.Tensor(frontier))
                 inp = torch.cat([action_emb_prev, s_att_prev, nft, parent_states], dim=-1)
 
             print("cat'd previous action embeddings.")
+            # print("input is cuda?" + repr(inp.is_cuda()))
+            # print("h is cuda?" + repr(h.is_cuda()))
+            # print("c is cuda?" + repr(c.is_cuda()))
+            inp = inp.cuda()
             h, c = self.decoder(inp, (h, c))
             states_sequence.append(h)
 
             print("computed combined attention.")
-            # compute the combined attention 
+            # compute the combined attention
+            src_mask = src_mask.cuda()
             s_att_prev = self.s_attention(encodings, encodings_attn, src_mask, h)
             #             print(s_att_prev.shape, "~s") # B x hiddendim
             s_att_all.append(s_att_prev)
@@ -370,14 +376,14 @@ class TranxParser(nn.Module):
         applyconstr_ids = torch.zeros((len(batch), self.T))
         gentok_ids = torch.zeros((len(batch), self.T))
         is_copy_tok = torch.zeros((len(batch), self.T, self.S))
-        for ei, example in enumerate(self.examples):
+        for ei, example in enumerate(self.examples_sorted):
             for t in range(self.T):
                 if t < len(example.tgt_actions):
                     action = example.tgt_actions[t].action
 
                     if isinstance(action, ApplyRuleAction):
                         is_applyconstr[ei, t] = 1
-                        applyconstr_ids[ei, t] = self.grammar.prod2id[action.production]
+                        applyconstr_ids[ei, t] = self.grammar.production_to_id[action.production]
 
                     elif isinstance(action, ReduceAction):
                         is_applyconstr[ei, t] = 1
@@ -451,7 +457,9 @@ class TranxParser(nn.Module):
         self.src_mask = self.get_token_mask(self.sents_lens_sorted)
         encodings, final_states = self.encode(self.sents_sorted, self.sents_lens_sorted)
         s_att_vecs = self.decode(self.examples_sorted, self.src_mask, encodings, final_states)
+        print("Finshed decode.")
         scores = self.compute_target_probabilities(encodings, s_att_vecs, self.src_mask, self.examples_sorted)
+        print("Finshed scoring.")
         return scores, final_states[0]
 
     def process(self, sentence, vocab):
