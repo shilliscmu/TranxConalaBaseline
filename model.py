@@ -76,7 +76,7 @@ class TranxParser(nn.Module):
         zeros_emb = torch.zeros(ACTION_EMB_SIZE)
         action_embs_prev = []
         parent_states = []
-        for eid, example in enumerate(batch.examples):
+        for eid, example in enumerate(batch):
             # action t - 1
             if time_step < len(example.tgt_actions):
                 parent_time_step = example.tgt_actions[time_step].parent_t
@@ -86,7 +86,7 @@ class TranxParser(nn.Module):
                 action_emb = zeros_emb
                 parent_time_step = 0
             action_embs_prev.append(action_emb)
-        parent_states.append(states_sequence[parent_time_step][eid])
+            parent_states.append(states_sequence[parent_time_step][eid])
         return torch.stack(action_embs_prev), torch.stack(parent_states)
     
     def get_token_mask(self, sent_lens):
