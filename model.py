@@ -484,11 +484,15 @@ class TranxParser(nn.Module):
         self.examples_sorted = [batch[i] for i in sent_idxs]
         #         return sents_sorted
         print(self.sents_sorted, self.sents_lens_sorted)
+        # list_of_tensor_sents = [torch.cuda.LongTensor(sent) for sent in self.sents_sorted]
+        # print("tensor of tensor sents type: " + torch.stack(list_of_tensor_sents).type())
         self.src_mask = self.get_token_mask(self.sents_lens_sorted)
         # self.sents_sorted = torch.cuda.LongTensor(self.sents_sorted)
         # self.sents_lens_sorted = torch.cuda.LongTensor(self.sents_lens_sorted)
 
         encodings, final_states = self.encode(self.sents_sorted, self.sents_lens_sorted)
+        encodings, final_states = encodings.cuda(), final_states.cuda()
+        self.src_mask = self.src.mask.cuda()
         s_att_vecs = self.decode(self.examples_sorted, self.src_mask, encodings, final_states)
         print("Finshed decode.")
         scores = self.compute_target_probabilities(encodings, s_att_vecs, self.src_mask, self.examples_sorted)
@@ -498,7 +502,7 @@ class TranxParser(nn.Module):
     def process(self, sentence):
         source = self.vocab.source
         word_ids = [source.add(word) for word in sentence]
-        return word_ids
+        return torch.cuda.LongTensor(word_ids)
 
     def save(self, path, saveGrammar):
         dir_name = os.path.dirname(path)
