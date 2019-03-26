@@ -23,7 +23,7 @@ class PreProcessor(object):
         dataset = json.load(open(file_path))
         examples = []
         for i, example_json in enumerate(dataset):
-            example_dict = preprocess_example(example_json)
+            example_dict = PreProcessor.preprocess_example(example_json)
 
             python_ast = ast.parse(example_dict['canonical_snippet'])
             canonical_code = astor.to_source(python_ast).strip()
@@ -40,9 +40,7 @@ class PreProcessor(object):
                                     slot_map=example_dict['slot_map']))
 
             examples.append(example)
-
         return examples
-
 
     def preprocess_example(example_json):
         intent = example_json['intent']
@@ -66,12 +64,11 @@ class PreProcessor(object):
         'slot_map': slot_map,
         'canonical_snippet': canonical_snippet}
 
-
     @staticmethod
     def get_train_and_dev(train_file_path, grammar_file, premitive_types):
         grammar = ASDLGrammar.grammar_from_text(open(grammar_file).read(), premitive_types)
         transition_system = TransitionSystem(grammar)
-        train_examples = preprocess_dataset(train_file_path)
+        train_examples = PreProcessor.preprocess_dataset(train_file_path)
 
         full_train_examples = train_examples[:]
         np.random.shuffle(train_examples)
@@ -94,5 +91,5 @@ class PreProcessor(object):
 
     @staticmethod
     def get_test(test_file_path):
-        test_examples = preprocess_dataset(test_file_path)
+        test_examples = PreProcessor.preprocess_dataset(test_file_path)
         return test_examples
