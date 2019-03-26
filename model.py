@@ -62,29 +62,32 @@ class TranxParser(nn.Module):
         return encodings, final_state
     
     
+    def action_emb_from_action(self, action):
+        if isinstance(action, ApplyRuleAction):
+            action_emb = self.productions_emb.weight[self.grammar.prod2id[action.production]]
+        elif isinstance(action, ReduceAction):
+            action_emb = self.productions_emb.weight[len(self.grammar)]
+        else:
+            action_emb = self.primitives_emb.weight[self.vocab.primitive[action.token]]
+        return action_emb
+
     def get_prev_action_embs(self, batch, time_step, states_sequence):
         # TODO
         zeros_emb = torch.zeros(ACTION_EMB_SIZE)
         action_embs_prev = []
         parent_states = []
-        for eid, example in enumerate(batch):
+        for eid, example in enumerate(batch.examples):
             # action t - 1
             if time_step < len(example.tgt_actions):
                 parent_time_step = example.tgt_actions[time_step].parent_t
                 prev_action = example.tgt_actions[time_step - 1].action
-                if isinstance(prev_action, ApplyRuleAction):
-                    action_emb = self.productions_emb.weight[self.grammar.prod2id[prev_action.production]]
-                elif isinstance(prev_action, ReduceAction):
-                    action_emb = self.productions_emb.weight[len(self.grammar)]
-                else:
-                    action_emb = self.primitives_emb.weight[self.vocab.primitive[prev_action.token]]
+                action_emb = self.action_emb_from_action(self, prev_action)
             else:
                 action_emb = zeros_emb
                 parent_time_step = 0
             action_embs_prev.append(action_emb)
-            parent_states.append(states_sequence[parent_time_step][eid])
+        parent_states.append(states_sequence[parent_time_step][eid])
         return torch.stack(action_embs_prev), torch.stack(parent_states)
-    
     
     def get_token_mask(self, sent_lens):
         # returns mask:  B x S, 1 where entries are to be masked, 0 for valid ones
@@ -100,7 +103,8 @@ class TranxParser(nn.Module):
         att_weight = torch.matmul(encodings_attn, h.unsqueeze(2)).squeeze(2) 
 #         print(att_weight.shape) # B x S
         # src_mask has 1 where pad, fill -inf there
-        att_weight.masked_fill_(src_mask, -float('inf'))
+        if src_mask is not None:
+            att_weight.masked_fill_(src_mask, -float('inf'))
 #             print(att_weight, src_mask)
         att_weight = F.softmax(att_weight, dim=1)
         batch_size, src_len = att_weight.shape
@@ -129,7 +133,7 @@ class TranxParser(nn.Module):
                 action_emb_prev, parent_states = self.get_prev_action_embs(batch, t, states_sequence)
                 frontier = [self.grammar.field2id[e.tgt_actions[t].frontier_field] if t < len(e.tgt_actions) else 0 for
                             e in batch]
-                nft = self.field_embed(torch.Tensor(frontier))
+                nft = self.fields_emb(torch.Tensor(frontier))
                 inp = torch.cat([action_emb_prev, s_att_prev, nft, parent_states], dim=-1)
             
             h, c = self.decoder(inp, (h, c))
@@ -147,20 +151,27 @@ class TranxParser(nn.Module):
     def pointer_weights(self, encodings, src_mask, s_att_vecs):
         # to compute hWs. encodings: B x hiddendim, s_att_vecs: T x B x  attsize, ptr lin layer dimx -> attsize
         hW = self.ptr_net_lin(encodings) # B x S x attsize
-        scores = torch.matmul(s_att_vecs, hW.permute(0, 2, 1))  # hW is (B x S x attsize), att_vecs is (B x T x attsize|)
+        if len(s_att_vecs.shape) == 2:
+            s_att_vecs.unsqueeze(0) # T = 1
+        scores = torch.matmul(s_att_vecs, hW.permute(0, 2, 1))  # hW is (B x S x attsize), s_att_vecs is (B x T x attsize|) or H x 1 x attsize
         scores = scores.permute(1, 0, 2) # T x B x S
         # src_mask is B x S
-        src_token_mask = self.src_mask.unsqueeze(0).expand_as(scores)
-        scores.masked_fill_(src_token_mask, -float('inf'))
-        return F.softmax(scores.permute(1, 0, 2), dim=2) # B x T x S 
+        if src_mask is not None:
+            src_token_mask = src_mask.unsqueeze(0).expand_as(scores)
+            scores.masked_fill_(src_token_mask, -float('inf'))
+        scores = scores.permute(1, 0, 2)
+        if len(s_att_vecs.shape) == 2:
+            scores = scores.squeeze(1)
+        return F.softmax(scores, dim=-1) # B x T x S or H x S
 
     def get_action_prob(self, s_att_vecs, lin_layer, weight):
         # to compute aWs. s_att_vecs: T x B x  attsize, weight: |a| x embdim, Lin layer dimx -> attsize 
         aW = lin_layer(weight.weight) # |a| x  attsize
         # aW is (|a| x  attsize), s_att_vecs is (T x B x  attsize)
         scores = torch.matmul(s_att_vecs, aW.t())  
-        scores = scores.permute(1, 0, 2) # B x T x |a| 
-        return F.softmax(scores, dim=2)  # B x T x |a| 
+        if len(scores.shape) == 3:
+            scores = scores.permute(1, 0, 2) # B x T x |a| 
+        return F.softmax(scores, dim=-1)  # B x T x |a| 
         
     def get_rule_masks(self, batch):
         is_applyconstr = torch.zeros((len(batch), self.T))
