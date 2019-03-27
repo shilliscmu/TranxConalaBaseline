@@ -126,7 +126,7 @@ class TranxParser(nn.Module):
             # p_tok_gen
             p_of_generating_each_primitive_in_vocab = self.get_action_prob(attention, self.attn_vec_to_action_emb, self.primitives_emb)
             # p_v_copy
-            print("source encodings size: " + repr(source_encodings.size()))
+            print("\nsource encodings size: " + repr(source_encodings.size()))
             print("attention size: " + repr(attention.size()))
             p_of_copying_from_source_sentence = self.pointer_weights(source_encodings, None, attention)
             #p_gen, and 1-p_copy
@@ -391,8 +391,10 @@ class TranxParser(nn.Module):
         # to compute hWs. encodings: B x hiddendim, s_att_vecs: T x B x  attsize, ptr lin layer dimx -> attsize
         # print("encodings shape: " + repr(encodings.size()))
         hW = self.ptr_net_lin(encodings)  # B x S x attsize
+        squeeze = False
         if len(s_att_vecs.shape) == 2:
             s_att_vecs = s_att_vecs.unsqueeze(1)  # T = 1
+            squeeze = True
         # hW is (B x S x attsize), s_att_vecs is (B x T x attsize|) or H x 1 x attsize
         # print("s_att_vecs shape: " + repr(s_att_vecs.size()))
         # print("hW shape: " + repr(hW.size()))
@@ -403,8 +405,9 @@ class TranxParser(nn.Module):
             src_token_mask = src_mask.unsqueeze(0).expand_as(scores)
             scores.masked_fill_(src_token_mask, -float('inf'))
         scores = scores.permute(1, 0, 2)
-        if len(s_att_vecs.shape) == 2:
+        if squeeze:
             scores = scores.squeeze(1)
+        print("scores from pointer weights size: " + repr(scores.size()))
         return F.softmax(scores, dim=-1)  # B x T x S or H x S
 
     # production_readout
