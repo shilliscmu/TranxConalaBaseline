@@ -501,7 +501,7 @@ class TranxParser(nn.Module):
 
     def process(self, sentence):
         source = self.vocab.source
-        word_ids = [source.add(word) for word in sentence]
+        word_ids = [source.__getitem__(word) for word in sentence]
         return torch.cuda.LongTensor(word_ids)
 
     def save(self, path, saveGrammar):
