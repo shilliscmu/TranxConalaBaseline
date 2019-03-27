@@ -25,8 +25,8 @@ class ASDLGrammar(object):
         self.productions = self.get_productions()
         self.types = self.get_types()
         self.fields = self.get_fields()
-        self.composite_types = self.get_composite_types()
-        self.primitive_types = self.get_primitives_types()
+        self.composite_types = set(self.get_composite_types())
+        self.primitive_types = set(self.get_primitives_types())
         
         # mappings of entities to ids
         self.production_to_id = {p: index for index, p in enumerate(self.productions)}
