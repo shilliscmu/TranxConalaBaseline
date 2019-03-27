@@ -63,10 +63,10 @@ class AbstractSyntaxTree(object):
             new_field = copy.fields[i]
             new_field.not_single_cardinality_finished = old_field.not_single_cardinality_finished
             if isinstance(old_field.type, ASDLCompositeType):
-                for value in old_field.as_value_list():
+                for value in old_field.as_value_list:
                     new_field.add_value(value.copy())
             else:
-                for value in old_field.as_value_list():
+                for value in old_field.as_value_list:
                     new_field.add_value(value)
         return copy
 
@@ -111,7 +111,7 @@ class AbstractSyntaxTree(object):
 
 
 class RealizedField(Field):
-    def __init__(self, field, value=None):
+    def __init__(self, field, value=None, parent=None):
         super(RealizedField, self).__init__(field.name, field.type, field.card)
         self.parent_node = None
         self.field = field
@@ -146,6 +146,7 @@ class RealizedField(Field):
         else:
             self.value = value
 
+    @property
     def as_value_list(self):
         if self.card == 'multiple':
             return self.value

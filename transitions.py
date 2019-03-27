@@ -90,7 +90,7 @@ class TransitionSystem(object):
                 if hyp.frontier_field.card == 'single':
                     if hyp.value_buffer:
                         return GenTokenAction
-                    elif hyp.frontier_field_card == 'optional':
+                    elif hyp.frontier_field.card == 'optional':
                         if hyp.value_buffer:
                             return GenTokenAction
                         else:
