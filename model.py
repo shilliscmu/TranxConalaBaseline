@@ -47,6 +47,7 @@ class TranxParser(nn.Module):
         # decoder
         self.decoder_input_dim = ACTION_EMB_SIZE + FIELD_EMB_SIZE + LSTM_HIDDEN_DIM + ATT_SIZE
         self.decoder = nn.LSTMCell(input_size=self.decoder_input_dim, hidden_size=LSTM_HIDDEN_DIM)
+        self.dropout = nn.Dropout(0.2)
 
         #source_encodings_attention_linear_layer
         self.lin_attn = nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM, bias=False)
@@ -64,8 +65,9 @@ class TranxParser(nn.Module):
         processed_sentence = self.process([sentence])
         source_encodings, (last_encoder_state, last_encoder_cell) = self.encode(processed_sentence, [len(sentence)])
         source_encodings_attention = self.lin_attn(source_encodings)
-        print("last encoder cell state" + repr(last_encoder_state.size()))
-        h_tm1 = torch.flatten(last_encoder_cell).cuda()
+        print("last encoder hidden state size: " + repr(last_encoder_state.size()))
+        print("last encoder cell size: " + repr(last_encoder_cell.size()))
+        h_tm1 = (last_encoder_state, last_encoder_cell)
 
         # self.decoder_cell_initializer_linear_layer = nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM)
         # self.decoder_cell_initializer_linear_layer = self.decoder_cell_initializer_linear_layer.cuda()
@@ -119,10 +121,12 @@ class TranxParser(nn.Module):
 
                 x = torch.cat(encoder_inputs, dim=-1)
             print("About to make a step.")
-            print("h_tm1 size: " + repr(h_tm1.size()))
+            # print("h_tm1 size: " + repr(h_tm1.size()))
             (h_t, cell), attention = self.step(x, h_tm1, expanded_source_encodings, expanded_source_encodings_attention)
-            log_p_of_each_apply_rule_action = F.log_softmax(self.production_prediction(attention), dim=-1)
-            p_of_generating_each_primitive_in_vocab = F.softmax(self.primitive_prediction(attention), dim=-1)
+            # log_p_of_each_apply_rule_action = F.log_softmax(self.production_prediction(attention), dim=-1)
+            log_p_of_each_apply_rule_action = self.get_action_prob(attention, ___, self.apply_const_and_reduce_emb.weight)
+            # p_of_generating_each_primitive_in_vocab = F.softmax(self.primitive_prediction(attention), dim=-1)
+            p_of_generating_each_primitive_in_vocab = F.softmax(self.gen_vs_copy_lin(attention))
             p_of_copying_from_source_sentence = self.ptr_net_lin(source_encodings, None, attention.unsqueeze(0).squeeze(0))
             p_of_making_primitive_prediction = F.softmax(self.gen_vs_copy_lin(attention), dim=-1)
             p_of_each_primitive = p_of_making_primitive_prediction[:, 0].unsqueeze(1) * p_of_generating_each_primitive_in_vocab
@@ -243,12 +247,17 @@ class TranxParser(nn.Module):
 
     def step(self, x, h_tm1, expanded_source_encodings, expanded_source_encodings_attention_linear_layer):
         print("x size: " + repr(x.size()))
-        print("h_tm1 size: " + repr(h_tm1.size()))
+        # print("h_tm1 size: " + repr(h_tm1.size()))
         print("decoder_input_dim: " + repr(self.decoder_input_dim))
 
+        # h.view(batch_size, -1), c.view(batch_size, -1)
+        h,c = h_tm1
+        h,c = h.squeeze(1).view(x.size(0), -1), c.squeeze(1).view(x.size(0), -1)
+        print("h shape: " + repr(h.size()))
+        h_tm1 = (h,c)
         h_t, cell_t = self.decoder(x, h_tm1)
         print("finished decoding.")
-        context_t = self.s_attention(expanded_source_encodings, expanded_source_encodings_attention_linear_layer, )
+        context_t = self.s_attention(expanded_source_encodings, expanded_source_encodings_attention_linear_layer, None, h_t)
         attention = torch.tanh(self.attention_vector_lin(torch.cat([h_t, context_t], 1)))
         attention = self.dropout(attention)
         return (h_t, cell_t), attention
@@ -347,15 +356,18 @@ class TranxParser(nn.Module):
                 nft = self.fields_emb(torch.cuda.LongTensor(frontier))
                 inp = torch.cat([action_emb_prev, s_att_prev, nft, parent_states], dim=-1)
 
-            print("cat'd previous action embeddings.")
+            # print("cat'd previous action embeddings.")
             # print("input is cuda?" + repr(inp.is_cuda()))
             # print("h is cuda?" + repr(h.is_cuda()))
             # print("c is cuda?" + repr(c.is_cuda()))
             inp = inp.cuda()
+            print("input size: " + repr(inp.size()))
+            print("h size: " + repr(h.size()))
+            print("c size: " + repr(c.size()))
             h, c = self.decoder(inp, (h, c))
             states_sequence.append(h)
 
-            print("computed combined attention.")
+            # print("computed combined attention.")
             # compute the combined attention
             src_mask = src_mask.cuda()
             s_att_prev = self.s_attention(encodings, encodings_attn, src_mask, h)
@@ -371,9 +383,9 @@ class TranxParser(nn.Module):
         if len(s_att_vecs.shape) == 2:
             s_att_vecs.unsqueeze(0)  # T = 1
         # hW is (B x S x attsize), s_att_vecs is (B x T x attsize|) or H x 1 x attsize
-        print("s_att_vecs shape: " + repr(s_att_vecs.size()))
-        print("hW shape: " + repr(hW.size()))
-        scores = torch.matmul(s_att_vecs, hW.permute(0, 2, 1))
+        # print("s_att_vecs shape: " + repr(s_att_vecs.size()))
+        # print("hW shape: " + repr(hW.size()))
+        scores = torch.matmul(s_att_vecs.permute(1,0,2), hW.permute(0, 2, 1))
         scores = scores.permute(1, 0, 2)  # T x B x S
         # src_mask is B x S
         if src_mask is not None:
@@ -447,28 +459,28 @@ class TranxParser(nn.Module):
         p_v_copy = self.pointer_weights(encodings, src_mask, s_att_vecs)  # B x T x S
         p_tok_gen = self.get_action_prob(s_att_vecs, self.attn_vec_to_action_emb, self.primitives_emb)  # B x T x |t|
 
-        print("p_v_copy type: " + p_v_copy.type())
-        print("is_copy_tok type: " + is_copy_tok.type())
+        # print("p_v_copy type: " + p_v_copy.type())
+        # print("is_copy_tok type: " + is_copy_tok.type())
         target_p_copy = torch.sum(p_v_copy * is_copy_tok, dim=2).t()  # T x B
 
         # target lookup
         # T x B (*ids is BxT)
-        print("index size: " + repr(applyconstr_ids.t().unsqueeze(2).permute(1,0,2).size()))
-        print("p_a_apply size: " + repr(p_a_apply.size()))
-        print("applyconstr_ids size: " + repr(applyconstr_ids.size()))
+        # print("index size: " + repr(applyconstr_ids.t().unsqueeze(2).permute(1,0,2).size()))
+        # print("p_a_apply size: " + repr(p_a_apply.size()))
+        # print("applyconstr_ids size: " + repr(applyconstr_ids.size()))
         target_p_a_apply = torch.gather(p_a_apply, dim=2, index=applyconstr_ids.t().unsqueeze(2).permute(1,0,2))
-        print("index size: " + repr(gentok_ids.t().unsqueeze(2).permute(1,0,2).size()))
-        print("p_tok_gen size: " + repr(p_tok_gen.size()))
-        print("gentok_ids size: " + repr(gentok_ids.size()))
+        # print("index size: " + repr(gentok_ids.t().unsqueeze(2).permute(1,0,2).size()))
+        # print("p_tok_gen size: " + repr(p_tok_gen.size()))
+        # print("gentok_ids size: " + repr(gentok_ids.size()))
         target_p_a_gen = torch.gather(p_tok_gen, dim=2, index=gentok_ids.t().unsqueeze(2).permute(1,0,2))
 
         # T x B
-        print("target_p_a_apply size: " + repr(target_p_a_apply.squeeze(1).size()))
-        print("is_applyconstr.t() size: " + repr(is_applyconstr.t().size()))
+        # print("target_p_a_apply size: " + repr(target_p_a_apply.squeeze(1).size()))
+        # print("is_applyconstr.t() size: " + repr(is_applyconstr.t().size()))
         p_a_apply_target = target_p_a_apply.squeeze(1) * is_applyconstr.t()
-        print("\np_gen[:,:,0] size: " + repr(p_gen[:, :, 0].size()))
-        print("target_p_a_gen size: " + repr(target_p_a_gen.squeeze(1).size()))
-        print("is_gentoken.t() size: " + repr(is_gentoken.t().size()))
+        # print("\np_gen[:,:,0] size: " + repr(p_gen[:, :, 0].size()))
+        # print("target_p_a_gen size: " + repr(target_p_a_gen.squeeze(1).size()))
+        # print("is_gentoken.t() size: " + repr(is_gentoken.t().size()))
         p_a_gen_target = p_gen[:, :, 0] * target_p_a_gen.squeeze(1) * is_gentoken.t()  # is_... is B x T
         p_a_gen_target += p_copy[:, :, 0] * target_p_copy * is_copy.t()  # T x B
         action_prob_target = p_a_apply_target + p_a_gen_target
@@ -481,7 +493,7 @@ class TranxParser(nn.Module):
 
         action_prob_target.masked_fill_(action_mask_pad, 1e-7)
         # make the not so useful stuff 0
-        print("action_prob_target.log type: " + action_prob_target.log().type())
+        # print("action_prob_target.log type: " + action_prob_target.log().type())
         # print("action_mask_pad type: " + action_mask_pad.type('torch.FloatTensor')).type()
         action_prob_target = action_prob_target.log() * (1 - action_mask_pad.type('torch.cuda.FloatTensor'))
 

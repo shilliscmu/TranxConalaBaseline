@@ -22,10 +22,16 @@ class PreProcessor(object):
         for i, example_json in enumerate(dataset):
             example_dict = PreProcessor.preprocess_example(example_json)
 
+            # print(example_dict['canonical_snippet'] + "\n")
             python_ast = ast.parse(example_dict['canonical_snippet'])
+            # print(ast.dump(python_ast))
             canonical_code = astor.to_source(python_ast).strip()
             tgt_ast = transition_system.python_ast_to_asdl_ast(python_ast, transition_system.grammar)
             tgt_actions = transition_system.get_actions(tgt_ast)
+            # print("Intent tokens: ")
+            # print(example_dict['intent_tokens'])
+            # print("Target actions: ")
+            # print(tgt_actions)
             tgt_action_infos = get_action_infos(example_dict['intent_tokens'], tgt_actions)
 
             example = Example(index=f'{i}-{example_json["question_id"]}',
