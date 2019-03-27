@@ -63,6 +63,8 @@ class TranxParser(nn.Module):
         processed_sentence = self.process([sentence])
         source_encodings, (last_encoder_state, last_encoder_cell) = self.encode(processed_sentence, [len(sentence)])
         self.decoder_cell_initializer_linear_layer = nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM)
+        self.decoder_cell_initializer_linear_layer = self.decoder_cell_initializer_linear_layer.cuda()
+        last_encoder_cell = last_encoder_cell.cuda()
         h_t1 = torch.tanh(self.decoder_cell_initializer_linear_layer(last_encoder_cell))
 
         hypothesis_scores = Variable(torch.cuda.FloatTensor([0.]), volatile=True)
@@ -250,7 +252,6 @@ class TranxParser(nn.Module):
         print("About to encode embedded sentences.")
         inputs = inputs.cuda()
         encodings, final_state = self.encoder(inputs)
-        encodings, final_state = encodings.cuda(), final_state.cuda()
         encodings, lens = rnn_utils.pad_packed_sequence(encodings, batch_first=True)
         print(encodings.shape)  # B x T x hiddendim
         return encodings, final_state
@@ -491,8 +492,7 @@ class TranxParser(nn.Module):
         # self.sents_lens_sorted = torch.cuda.LongTensor(self.sents_lens_sorted)
 
         encodings, final_states = self.encode(self.sents_sorted, self.sents_lens_sorted)
-        encodings, final_states = encodings.cuda(), final_states.cuda()
-        self.src_mask = self.src.mask.cuda()
+        self.src_mask = self.src_mask.cuda()
         s_att_vecs = self.decode(self.examples_sorted, self.src_mask, encodings, final_states)
         print("Finshed decode.")
         scores = self.compute_target_probabilities(encodings, s_att_vecs, self.src_mask, self.examples_sorted)
@@ -501,8 +501,14 @@ class TranxParser(nn.Module):
 
     def process(self, sentence):
         source = self.vocab.source
-        word_ids = [source.__getitem__(word) for word in sentence]
-        return torch.cuda.LongTensor(word_ids)
+        if isinstance(sentence[0], (list,)):
+            processed_sent = []
+            for sent in sentence:
+                processed_sent.append(torch.cuda.LongTensor([source.__getitem__(word) for word in sent]))
+            return processed_sent
+        else:
+            word_ids = [source.__getitem__(word) for word in sentence]
+            return torch.cuda.LongTensor(word_ids)
 
     def save(self, path, saveGrammar):
         dir_name = os.path.dirname(path)
