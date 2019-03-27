@@ -10,20 +10,24 @@ class Hypothesis(object):
     def __init__(self):
         self.tree = None
         self.actions = []
-        self.action_info = []
         self.score = 0.
         self.frontier_node = None
         self.frontier_field = None
-        self.code = None
         self.value_buffer = []
         self.t = 0
 
     def apply_action(self, action):
+        # self.frontier_field is none, so it defaults to reducing
+        # print(self.frontier_field.type)
         if self.tree is None:
-            if isinstance(action, ApplyRuleAction):
-                self.tree = AbstractSyntaxTree(action.production)
-                self.update_frontier()
+            assert isinstance(action, ApplyRuleAction), 'Invalid action [%s], only ApplyRule action is valid ' \
+                                                        'at the beginning of decoding'
+
+            self.tree = AbstractSyntaxTree(action.production)
+            self.update_frontier()
         elif self.frontier_node:
+            # print(action.__repr__())
+            # print(self.frontier_node)
             if isinstance(self.frontier_field.type, ASDLCompositeType):
                 if isinstance(action, ApplyRuleAction):
                     field_val = AbstractSyntaxTree(action.production)
@@ -31,9 +35,11 @@ class Hypothesis(object):
                     self.frontier_field.add_value(field_val)
                     self.update_frontier()
                 elif isinstance(action, ReduceAction):
-                    if self.frontier_field.card in ('optional', 'multiple'):
-                        self.frontier_field.set_finish()
-                        self.update_frontier()
+                    assert self.frontier_field.card in ('optional', 'multiple'), 'Reduce action can only be ' \
+                                                                                 'applied on field with multiple ' \
+                                                                                 'cardinality'
+                    self.frontier_field.set_finished()
+                    self.update_frontier()
                 else:
                     raise ValueError('Can\'t do %s on field %s' % (action, self.frontier_field))
             else:
@@ -50,12 +56,15 @@ class Hypothesis(object):
                         self.frontier_field.add_value(action.token)
                         end_prim = True
                     if end_prim and self.frontier_field.card in ('single', 'optional'):
-                        self.frontier_field.set_finish()
+                        self.frontier_field.set_finished()
                         self.update_frontier()
                 elif isinstance(action, ReduceAction):
-                    if self.frontier_field.card in ('optional', 'multiple'):
-                        self.frontier_field.set_finish()
-                        self.update_frontier()
+                    # print(self.frontier_field.card)
+                    assert self.frontier_field.card in ('optional', 'multiple'), 'Reduce action can only be ' \
+                                                                                        'applied on field with multiple ' \
+                                                                                        'cardinality'
+                    self.frontier_field.set_finished()
+                    self.update_frontier()
                 else:
                     raise ValueError('With a primitive field, you can only generate or reduce.')
 
@@ -87,11 +96,9 @@ class Hypothesis(object):
         else:
             self.frontier_node, self.frontier_field = None, None
 
-    def clone_and_apply_action_info(self, action_info):
-        action = action_info.action
+    def clone_and_apply_action(self, action):
         new_hypothesis = self.copy()
         new_hypothesis.apply_action(action)
-        new_hypothesis.action_info.append(action_info)
         return new_hypothesis
 
     def copy(self):
@@ -100,10 +107,8 @@ class Hypothesis(object):
             new_hypothesis.tree = self.tree.copy()
 
         new_hypothesis.actions = list(self.actions)
-        new_hypothesis.action_info = list(self.action_info)
         new_hypothesis.score = self.score
         new_hypothesis.value_buffer = list(self.value_buffer)
         new_hypothesis.t = self.t
-        new_hypothesis.code = self.code
         new_hypothesis.update_frontier()
         return new_hypothesis

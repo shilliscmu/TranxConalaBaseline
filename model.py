@@ -291,13 +291,13 @@ class TranxParser(nn.Module):
             if time_step < len(example.tgt_actions):
                 parent_time_step = example.tgt_actions[time_step].parent_t
                 prev_action = example.tgt_actions[time_step - 1].action
-                action_emb = self.action_emb_from_action(prev_action)
+                action_emb = torch.cuda.FloatTensor(self.action_emb_from_action(prev_action))
             else:
                 action_emb = zeros_emb
                 parent_time_step = 0
             action_embs_prev.append(action_emb)
-            parent_states.append(states_sequence[parent_time_step][eid])
-        return torch.stack(action_embs_prev), torch.stack(parent_states)
+            parent_states.append(torch.cuda.FloatTensor(states_sequence[parent_time_step][eid]))
+        return torch.stack(action_embs_prev).cuda(), torch.stack(parent_states).cuda()
 
     def get_token_mask(self, sent_lens):
         # returns mask:  B x S, 1 where entries are to be masked, 0 for valid ones
