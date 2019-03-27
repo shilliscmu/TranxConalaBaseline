@@ -9,25 +9,25 @@ from itertools import chain
 class ASDLGrammar(object):
     def __init__(self, productions):
         # dict of productions by head types
-        self.productions = OrderedDict()
+        self.productions_dict = OrderedDict()
         # map of productions by constructor
         self.constructor_production_map = {}
         for p in productions:
-            if p.type not in self.productions:
-                self.productions[p.type] = []
-            self.productions[p.type].append(p)
+            if p.type not in self.productions_dict:
+                self.productions_dict[p.type] = []
+            self.productions_dict[p.type].append(p)
             self.constructor_production_map[p.constructor.name] = p
-        
+
         self.root_type = productions[0].type
         # num of constructors
-        self.size = sum(len(head) for head in self.productions.values())
+        self.size = sum(len(head) for head in self.productions_dict.values())
 
         self.productions = self.get_productions()
         self.types = self.get_types()
         self.fields = self.get_fields()
         self.composite_types = set(self.get_composite_types())
         self.primitive_types = set(self.get_primitives_types())
-        
+
         # mappings of entities to ids
         self.production_to_id = {p: index for index, p in enumerate(self.productions)}
         self.type_to_id = {t: index for index, t in enumerate(self.types)}
@@ -42,13 +42,13 @@ class ASDLGrammar(object):
 
     def __getitem__(self, datum):
         if isinstance(datum, str):
-            return self.productions[ASDLType(datum)]
+            return self.productions_dict[ASDLType(datum)]
         else:
-            return self.productions[datum]
+             return self.productions_dict[datum]
 
     # get a list of all production values
     def get_productions(self):
-        productions = sorted(chain.from_iterable(self.productions.values()), key=lambda x: repr(x))
+        productions = sorted(chain.from_iterable(self.productions_dict.values()), key=lambda x: repr(x))
         return productions
 
     def get_productions_by_constructor_name(self, constructor_name):
@@ -254,7 +254,7 @@ class Field(object):
         if plain:
             return plain_repr
         else:
-            return 'Field(%)' % plain_repr
+            return 'Field(%s)' % plain_repr
 
 class ASDLType(object):
     def __init__(self, type_name):
@@ -283,4 +283,3 @@ class ASDLCompositeType(ASDLType):
 
 class ASDLPrimitiveType(ASDLType):
     pass
-

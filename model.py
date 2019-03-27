@@ -142,19 +142,24 @@ class TranxParser(nn.Module):
             hypothesis_scores_resulting_from_applyrule_actions = []
 
             for hypothesis_id, hypothesis in enumerate(hypotheses):
-                action_types = self.transition_sys.get_valid_continuation_types(hypothesis)
+                action_types = self.transition_system.get_valid_continuation_types(hypothesis)
+                try:
+                    len(action_types)
+                except TypeError:
+                    action_types = [action_types]
+
                 for action_type in action_types:
                     if action_type == ApplyRuleAction:
-                        productions = self.transition_sys.get_valid_continuating_productions(hypothesis)
+                        productions = self.transition_system.get_valid_continuating_productions(hypothesis)
                         for production in productions:
                             production_id = self.grammar.production_to_id[production]
                             hypothesis_production_ids_resulting_from_applyrule_actions.append(production_id)
-                            production_score = log_p_of_each_apply_rule_action[hypothesis_id, production_id].data[0]
+                            production_score = log_p_of_each_apply_rule_action[hypothesis_id, production_id].item()
                             new_hypothesis_score = hypothesis.score + production_score
                             hypothesis_scores_resulting_from_applyrule_actions.append(new_hypothesis_score)
                             hypothesis_ids_for_which_we_applyrule.append(hypothesis_id)
                     elif action_type == ReduceAction:
-                        reduce_score = log_p_of_each_apply_rule_action[hypothesis_id, len(self.grammar)].data[0]
+                        reduce_score = log_p_of_each_apply_rule_action[hypothesis_id, len(self.grammar)].item()
                         new_hypothesis_score = hypothesis.score + reduce_score
                         hypothesis_scores_resulting_from_applyrule_actions.append(new_hypothesis_score)
                         hypothesis_production_ids_resulting_from_applyrule_actions.append(len(self.grammar))
@@ -169,9 +174,9 @@ class TranxParser(nn.Module):
                             if token in primitive_vocab:
                                 token_id = primitive_vocab[token]
                                 p_of_each_primitive[hypothesis_id, token_id] = p_of_each_primitive[hypothesis_id, token_id] + p_of_making_copy
-                                hypothesis_copy_probabilities_by_token[token] = (token_positions, p_of_making_copy.data[0])
+                                hypothesis_copy_probabilities_by_token[token] = (token_positions, p_of_making_copy.item())
                             else:
-                                copied_unks_info.append({'token': token, 'token_positions': token_positions, 'copy_prob': p_of_making_copy.data[0]})
+                                copied_unks_info.append({'token': token, 'token_positions': token_positions, 'copy_prob': p_of_making_copy.item()})
                         if len(copied_unks_info) > 0:
                             copied_unk = np.array([unk['copy_prob'] for unk in copied_unks_info]).argmax()
                             copied_token = copied_unks_info[copied_unk]['token']
@@ -383,9 +388,10 @@ class TranxParser(nn.Module):
 
     def pointer_weights(self, encodings, src_mask, s_att_vecs):
         # to compute hWs. encodings: B x hiddendim, s_att_vecs: T x B x  attsize, ptr lin layer dimx -> attsize
+        print("encodings shape: " + repr(encodings.size()))
         hW = self.ptr_net_lin(encodings)  # B x S x attsize
         if len(s_att_vecs.shape) == 2:
-            s_att_vecs.unsqueeze(0)  # T = 1
+            s_att_vecs = s_att_vecs.unsqueeze(1)  # T = 1
         # hW is (B x S x attsize), s_att_vecs is (B x T x attsize|) or H x 1 x attsize
         print("s_att_vecs shape: " + repr(s_att_vecs.size()))
         print("hW shape: " + repr(hW.size()))
