@@ -62,8 +62,16 @@ class TranxParser(nn.Module):
         primitive_vocab = self.vocab.primitive
         processed_sentence = self.process([sentence])
         source_encodings, (last_encoder_state, last_encoder_cell) = self.encode(processed_sentence, [len(sentence)])
+        source_encodings_attention = self.lin_attn(source_encodings)
         print("last encoder cell state" + repr(last_encoder_state.size()))
-        h_t1 = last_encoder_state.cuda()
+        h_tm1 = torch.flatten(last_encoder_cell).cuda()
+
+        # self.decoder_cell_initializer_linear_layer = nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM)
+        # self.decoder_cell_initializer_linear_layer = self.decoder_cell_initializer_linear_layer.cuda()
+        # last_encoder_cell = last_encoder_cell.cuda()
+        # print("last encoder cell size: " + repr(last_encoder_cell.size()))
+        # print("last encoder cell state" + repr(last_encoder_state.size()))
+        # h_tm1 = torch.tanh(self.decoder_cell_initializer_linear_layer(last_encoder_cell))
 
         hypothesis_scores = Variable(torch.cuda.FloatTensor([0.]), volatile=True)
         source_token_positions_by_token = OrderedDict()
@@ -78,10 +86,10 @@ class TranxParser(nn.Module):
             num_of_hypotheses = len(hypotheses)
             expanded_source_encodings = source_encodings.expand(num_of_hypotheses, source_encodings.size(1),
                                                                 source_encodings.size(2))
-            expanded_source_encodings_attention_linear_layer = self.lin_attn.expand(
-                num_of_hypotheses, self.lin_attn.size(1), self.lin_attn.size(2))
+            expanded_source_encodings_attention = source_encodings_attention.expand(
+                num_of_hypotheses, source_encodings_attention.size(1), LSTM_HIDDEN_DIM)
             if t == 0:
-                x = Variable(torch.cuda.FloatTensor(1, 128).zero_(), volatile=True)
+                x = Variable(torch.cuda.FloatTensor(1, self.decoder_input_dim).zero_(), volatile=True)
             else:
                 actions = [h.actions[-1] for h in hypotheses]
                 action_embeddings = []
@@ -109,7 +117,9 @@ class TranxParser(nn.Module):
                 encoder_inputs.append(parent_states)
 
                 x = torch.cat(encoder_inputs, dim=-1)
-            (h_t, cell), attention = self.step(x, h_t1, expanded_source_encodings, expanded_source_encodings_attention_linear_layer)
+            print("About to make a step.")
+            print("h_tm1 size: " + repr(h_tm1.size()))
+            (h_t, cell), attention = self.step(x, h_tm1, expanded_source_encodings, expanded_source_encodings_attention)
             log_p_of_each_apply_rule_action = F.log_softmax(self.production_prediction(attention), dim=-1)
             p_of_generating_each_primitive_in_vocab = F.softmax(self.primitive_prediction(attention), dim=-1)
             p_of_copying_from_source_sentence = self.ptr_net_lin(source_encodings, None, attention.unsqueeze(0).squeeze(0))
@@ -219,7 +229,7 @@ class TranxParser(nn.Module):
                     working_hypothesis_ids.append(previous_hypothesis_id)
             if working_hypothesis_ids:
                 hypothesis_states = [hypothesis_states[i] + [(h_t[i], cell[i])] for i in working_hypothesis_ids]
-                h_t1 = (h_t[working_hypothesis_ids], cell[working_hypothesis_ids])
+                h_tm1 = (h_t[working_hypothesis_ids], cell[working_hypothesis_ids])
                 att_t1 = attention[working_hypothesis_ids]
                 hypotheses = new_hypotheses
                 hypothesis_scores = Variable(torch.cuda.FloatTensor([hyp.score for hyp in hypotheses]))
@@ -230,8 +240,13 @@ class TranxParser(nn.Module):
         finished_hypotheses.sort(key=lambda hyp: -hyp.score)
         return finished_hypotheses
 
-    def step(self, x, h_t1, expanded_source_encodings, expanded_source_encodings_attention_linear_layer):
-        h_t, cell_t = self.decoder(x, h_t1)
+    def step(self, x, h_tm1, expanded_source_encodings, expanded_source_encodings_attention_linear_layer):
+        print("x size: " + repr(x.size()))
+        print("h_tm1 size: " + repr(h_tm1.size()))
+        print("decoder_input_dim: " + repr(self.decoder_input_dim))
+
+        h_t, cell_t = self.decoder(x, h_tm1)
+        print("finished decoding.")
         context_t = self.s_attention(expanded_source_encodings, expanded_source_encodings_attention_linear_layer, )
         attention = torch.tanh(self.attention_vector_lin(torch.cat([h_t, context_t], 1)))
         attention = self.dropout(attention)
@@ -250,8 +265,10 @@ class TranxParser(nn.Module):
         print("About to encode embedded sentences.")
         inputs = inputs.cuda()
         encodings, final_state = self.encoder(inputs)
+        print("final_state shape 0 size: " + repr(final_state[0].size()))
+        print("final_state shape 1 size: " + repr(final_state[1].size()))
         encodings, lens = rnn_utils.pad_packed_sequence(encodings, batch_first=True)
-        print(encodings.shape)  # B x T x hiddendim
+        print("encodings shape: " + repr(encodings.shape))  # B x T x hiddendim
         return encodings, final_state
 
     def action_emb_from_action(self, action):
