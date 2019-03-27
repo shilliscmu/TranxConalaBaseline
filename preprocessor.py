@@ -98,7 +98,7 @@ class PreProcessor(object):
     def get_test(self, test_file_path, grammar_file, primitive_types):
         grammar = ASDLGrammar.grammar_from_text(open(grammar_file).read(), primitive_types)
         transition_system = TransitionSystem(grammar)
-        test_examples = PreProcessor.preprocess_dataset(test_file_path, transition_system)
+        test_examples = self.preprocess_dataset(test_file_path, transition_system)
         return test_examples
 
 

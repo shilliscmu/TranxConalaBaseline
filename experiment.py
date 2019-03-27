@@ -177,7 +177,8 @@ def train(train_file_path):
             patience = 0
 
 def test(test_file_path, model_path):
-    test_data = PreProcessor.get_test(test_file_path, GRAMMAR_FILE, PRIMITIVE_TYPES)
+    preprocessor = PreProcessor()
+    test_data = preprocessor.get_test(test_file_path, GRAMMAR_FILE, PRIMITIVE_TYPES)
     print('load model from [%s]' % model_path,)
     params = torch.load(model_path, map_location=lambda storage, loc: storage)
     transition_system = params['transition_system']
