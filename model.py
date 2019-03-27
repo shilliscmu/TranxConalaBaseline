@@ -65,6 +65,8 @@ class TranxParser(nn.Module):
         self.decoder_cell_initializer_linear_layer = nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM)
         self.decoder_cell_initializer_linear_layer = self.decoder_cell_initializer_linear_layer.cuda()
         last_encoder_cell = last_encoder_cell.cuda()
+        print("last encoder cell size: " + repr(last_encoder_cell.size()))
+        print("last encoder cell state" + repr(last_encoder_state.size()))
         h_t1 = torch.tanh(self.decoder_cell_initializer_linear_layer(last_encoder_cell))
 
         hypothesis_scores = Variable(torch.cuda.FloatTensor([0.]), volatile=True)
