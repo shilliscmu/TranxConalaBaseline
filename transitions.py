@@ -76,8 +76,8 @@ class TransitionSystem(object):
                 if field.card == 'multiple' or field.card == 'optional' and not field_actions:
                     field_actions.append(ReduceAction())
 
-                actions.extend(field_actions)
-            return actions
+            actions.extend(field_actions)
+        return actions
 
     def get_valid_continuation_types(self, hyp):
         if hyp.tree:
