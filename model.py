@@ -221,7 +221,7 @@ class TranxParser(nn.Module):
                         else:
                             token = primitive_vocab.id2word[primitive_vocab.unk_id]
                     else:
-                        token = primitive_vocab.id2word[token_id]
+                        token = primitive_vocab.id2word[token_id.item()]
                     action = GenTokenAction(token)
 
                     if token in source_token_positions_by_token:
@@ -279,7 +279,7 @@ class TranxParser(nn.Module):
         #         print(padded_sents)
         # print("About to embed source sentences.")
         embeddings = self.src_emb(padded_sents)
-        print(embeddings.shape)  # B x T x embdim
+        # print(embeddings.shape)  # B x T x embdim
         # print("About to pad embedded sentences.")
         inputs = rnn_utils.pack_padded_sequence(embeddings, sent_lens, batch_first=True)
         # print("About to encode embedded sentences.")
@@ -345,7 +345,7 @@ class TranxParser(nn.Module):
         return s_att
 
     def decode(self, batch, src_mask, encodings, final_state):
-        print(src_mask.shape, 'mask')
+        # print(src_mask.shape, 'mask')
         # produce attention vectors
         batch_size = len(batch)
         h, c = final_state
@@ -526,13 +526,13 @@ class TranxParser(nn.Module):
         # self.sents = torch.cuda.LongTensor(self.sents)
         self.sent_lens = [len(s) for s in self.sents]
         self.S = max(self.sent_lens)
-        print(self.T, self.S, self.sent_lens)
+        # print(self.T, self.S, self.sent_lens)
         sent_idxs = sorted(list(range(len(self.sents))), key=lambda i: -self.sent_lens[i])
         self.sents_sorted = [self.sents[i] for i in sent_idxs]
         self.sents_lens_sorted = [self.sent_lens[i] for i in sent_idxs]
         self.examples_sorted = [batch[i] for i in sent_idxs]
         #         return sents_sorted
-        print(self.sents_sorted, self.sents_lens_sorted)
+        # print(self.sents_sorted, self.sents_lens_sorted)
         # list_of_tensor_sents = [torch.cuda.LongTensor(sent) for sent in self.sents_sorted]
         # print("tensor of tensor sents type: " + torch.stack(list_of_tensor_sents).type())
         self.src_mask = self.get_token_mask(self.sents_lens_sorted)

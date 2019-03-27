@@ -95,7 +95,7 @@ def train(train_file_path):
 
         model_file = SAVE_TO + '.iter%d.bin' % train_iter
         print('save model to [%s]' % model_file)
-        model.save(model_file, saveGrammar=False)
+        model.save(model_file, saveGrammar=True)
 
         # perform validation
 
