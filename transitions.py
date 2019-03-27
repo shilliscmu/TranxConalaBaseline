@@ -66,10 +66,15 @@ class TransitionSystem(object):
                                 current_child_actions = self.get_actions(val)
                                 field_actions.extend(current_child_actions)
                         elif field.card == 'optional':
-                            field_actions = self.get_actions(field.val)
+                            field_actions = self.get_actions(field.value)
 
-                    if field.card == 'multiple' or field.card == 'optional':
+                    if field.card == 'multiple' or field.card == 'optional' and not field_actions:
                         field_actions.append(ReduceAction())
+            else:
+                field_actions = self.get_primitive_field_actions(field)
+
+                if field.card == 'multiple' or field.card == 'optional' and not field_actions:
+                    field_actions.append(ReduceAction())
 
                 actions.extend(field_actions)
             return actions
@@ -151,7 +156,7 @@ class TransitionSystem(object):
     def get_primitive_field_actions(self, realized_field):
         actions = []
         if realized_field.value is not None:
-            if realized_field.card == 'mult':
+            if realized_field.card == 'multiple':
                 field_values = realized_field.value
             else:
                 field_values = [realized_field.value]
