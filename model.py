@@ -113,11 +113,8 @@ class TranxParser(nn.Module):
 
                 parent_created_times = [h.frontier_node.created_time for h in hypotheses]
                 parent_states = torch.stack(
-                    [hypotheses_states[h_id][parent_created_time][0]] for h_id, parent_created_time in
-                    enumerate(parent_created_times))
-                parent_cells = torch.stack(
-                    [hypotheses_states[h_id][parent_created_time][1] for h_id, parent_created_time in
-                     enumerate(parent_created_times)])
+                    [hypotheses_states[h_id][parent_created_time][0] for h_id, parent_created_time in
+                    enumerate(parent_created_times)])
                 encoder_inputs.append(parent_states)
 
                 x = torch.cat(encoder_inputs, dim=-1)
@@ -129,6 +126,8 @@ class TranxParser(nn.Module):
             # p_tok_gen
             p_of_generating_each_primitive_in_vocab = self.get_action_prob(attention, self.attn_vec_to_action_emb, self.primitives_emb)
             # p_v_copy
+            print("source encodings size: " + repr(source_encodings.size()))
+            print("attention size: " + repr(attention.size()))
             p_of_copying_from_source_sentence = self.pointer_weights(source_encodings, None, attention)
             #p_gen, and 1-p_copy
             p_of_making_primitive_prediction = F.softmax(self.gen_vs_copy_lin(attention), dim=-1)
@@ -168,6 +167,8 @@ class TranxParser(nn.Module):
                         hypothesis_ids_for_which_we_gentoken.append(hypothesis_id)
                         hypothesis_copy_probabilities_by_token = dict()
                         copied_unks_info = []
+                        print("len of p_copying_from_source_sentence: " + repr(len(p_of_copying_from_source_sentence)))
+                        print("num hypotheses: " + repr(num_of_hypotheses))
                         for token, token_positions in source_token_positions_by_token.items():
                             total_copy_prob = torch.gather(p_of_copying_from_source_sentence[hypothesis_id], 0, Variable(torch.cuda.LongTensor(token_positions))).sum()
                             p_of_making_copy = p_of_making_primitive_prediction[hypothesis_id, 1] * total_copy_prob
@@ -388,13 +389,13 @@ class TranxParser(nn.Module):
 
     def pointer_weights(self, encodings, src_mask, s_att_vecs):
         # to compute hWs. encodings: B x hiddendim, s_att_vecs: T x B x  attsize, ptr lin layer dimx -> attsize
-        print("encodings shape: " + repr(encodings.size()))
+        # print("encodings shape: " + repr(encodings.size()))
         hW = self.ptr_net_lin(encodings)  # B x S x attsize
         if len(s_att_vecs.shape) == 2:
             s_att_vecs = s_att_vecs.unsqueeze(1)  # T = 1
         # hW is (B x S x attsize), s_att_vecs is (B x T x attsize|) or H x 1 x attsize
-        print("s_att_vecs shape: " + repr(s_att_vecs.size()))
-        print("hW shape: " + repr(hW.size()))
+        # print("s_att_vecs shape: " + repr(s_att_vecs.size()))
+        # print("hW shape: " + repr(hW.size()))
         scores = torch.matmul(s_att_vecs.permute(1,0,2), hW.permute(0, 2, 1))
         scores = scores.permute(1, 0, 2)  # T x B x S
         # src_mask is B x S
