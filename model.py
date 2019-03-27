@@ -219,9 +219,9 @@ class TranxParser(nn.Module):
                         if hypothesis_unknowns_resulting_from_gentoken:
                             token = hypothesis_unknowns_resulting_from_gentoken[(new_hypothesis_position - len(hypothesis_scores_resulting_from_applyrule_actions)) // p_of_each_primitive.size(1)]
                         else:
-                            token = primitive_vocab.id_to_word[primitive_vocab.unk_id]
+                            token = primitive_vocab.id2word[primitive_vocab.unk_id]
                     else:
-                        token = primitive_vocab.id_2_word[token_id]
+                        token = primitive_vocab.id2word[token_id]
                     action = GenTokenAction(token)
 
                     if token in source_token_positions_by_token:
