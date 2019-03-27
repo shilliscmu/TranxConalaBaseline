@@ -108,7 +108,7 @@ class TranxParser(nn.Module):
 
                 frontier_fields = [h.frontier_field.field for h in hypotheses]
                 frontier_field_embeddings = self.fields_emb(
-                    Variable(torch.cuda.FloatTensor([self.grammar.field_to_id[f] for f in frontier_fields])))
+                    Variable(torch.cuda.LongTensor([self.grammar.field_to_id[f] for f in frontier_fields])))
                 encoder_inputs.append(frontier_field_embeddings)
 
                 parent_created_times = [h.frontier_node.created_time for h in hypotheses]
@@ -204,7 +204,7 @@ class TranxParser(nn.Module):
                 if new_hypothesis_position < len(hypothesis_scores_resulting_from_applyrule_actions):
                     previous_hypothesis_id = hypothesis_ids_for_which_we_applyrule[new_hypothesis_position]
                     previous_hypothesis = hypotheses[previous_hypothesis_id]
-                    production_id = hypothesis_scores_resulting_from_applyrule_actions[new_hypothesis_position]
+                    production_id = hypothesis_production_ids_resulting_from_applyrule_actions[new_hypothesis_position]
                     if production_id < len(self.grammar):
                         apply_production = self.grammar.id_to_production[production_id]
                         action = ApplyRuleAction(apply_production)
@@ -236,13 +236,13 @@ class TranxParser(nn.Module):
                 new_hypothesis = previous_hypothesis.clone_and_apply_action_info(action_info)
                 new_hypothesis.score = new_hypothesis_score
 
-                if new_hypothesis.completed:
+                if new_hypothesis.is_completed():
                     finished_hypotheses.append(new_hypothesis)
                 else:
                     new_hypotheses.append(new_hypothesis)
                     working_hypothesis_ids.append(previous_hypothesis_id)
             if working_hypothesis_ids:
-                hypothesis_states = [hypothesis_states[i] + [(h_t[i], cell[i])] for i in working_hypothesis_ids]
+                hypotheses_states = [hypotheses_states[i] + [(h_t[i], cell[i])] for i in working_hypothesis_ids]
                 h_tm1 = (h_t[working_hypothesis_ids], cell[working_hypothesis_ids])
                 att_t1 = attention[working_hypothesis_ids]
                 hypotheses = new_hypotheses

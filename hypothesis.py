@@ -112,3 +112,6 @@ class Hypothesis(object):
         new_hypothesis.t = self.t
         new_hypothesis.update_frontier()
         return new_hypothesis
+
+    def is_completed(self):
+        return self.tree and self.frontier_field is None
