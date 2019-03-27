@@ -274,9 +274,9 @@ class TranxParser(nn.Module):
 
     def action_emb_from_action(self, action):
         if isinstance(action, ApplyRuleAction):
-            action_emb = self.productions_emb.weight[self.grammar.production_to_id[action.production]]
+            action_emb = self.apply_const_and_reduce_emb.weight[self.grammar.production_to_id[action.production]]
         elif isinstance(action, ReduceAction):
-            action_emb = self.productions_emb.weight[len(self.grammar)]
+            action_emb = self.apply_const_and_reduce_emb.weight[len(self.grammar)]
         else:
             action_emb = self.primitives_emb.weight[self.vocab.primitive[action.token]]
         return action_emb
@@ -291,15 +291,11 @@ class TranxParser(nn.Module):
             if time_step < len(example.tgt_actions):
                 parent_time_step = example.tgt_actions[time_step].parent_t
                 prev_action = example.tgt_actions[time_step - 1].action
-                action_emb = self.action_emb_from_action(self, prev_action)
+                action_emb = self.action_emb_from_action(prev_action)
             else:
                 action_emb = zeros_emb
                 parent_time_step = 0
             action_embs_prev.append(action_emb)
-            # TODO: encoder_inputs.append(att_t1)
-            # TODO: frontier_fields = [h.frontier_field.field for h in hypotheses]
-            #                 frontier_field_embeddings = self.fields_emb(Variable(torch.cuda.FloatTensor([self.grammar.field_to_id[f] for f in frontier_fields])))
-            #                 encoder_inputs.append(frontier_field_embeddings)
             parent_states.append(states_sequence[parent_time_step][eid])
         return torch.stack(action_embs_prev), torch.stack(parent_states)
 
@@ -324,7 +320,7 @@ class TranxParser(nn.Module):
         ctx = torch.matmul(att_weight.view(batch_size, 1, src_len), encodings).squeeze(1)
         #         print(ctx.shape) # B x hiddendim
         # s_att_prev is not previous in this time step, but the next step
-        s_att = torch.tanfh(self.attention_vector_lin(torch.cat([ctx, h], 1)))
+        s_att = torch.tanh(self.attention_vector_lin(torch.cat([ctx, h], 1)))
         return s_att
 
     def decode(self, batch, src_mask, encodings, final_state):
@@ -346,7 +342,7 @@ class TranxParser(nn.Module):
                 action_emb_prev, parent_states = self.get_prev_action_embs(batch, t, states_sequence)
                 frontier = [self.grammar.field_to_id[e.tgt_actions[t].frontier_field] if t < len(e.tgt_actions) else 0 for
                             e in batch]
-                nft = self.fields_emb(torch.Tensor(frontier))
+                nft = self.fields_emb(torch.cuda.LongTensor(frontier))
                 inp = torch.cat([action_emb_prev, s_att_prev, nft, parent_states], dim=-1)
 
             print("cat'd previous action embeddings.")
