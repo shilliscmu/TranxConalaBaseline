@@ -14,7 +14,7 @@ class ConalaEvaluator(object):
         self.default_metric = 'corpus_bleu'
 
     def is_hyp_correct(self, example, hyp):
-        ref_code = example.tgt_code
+        ref_code = example.code
         ref_py_ast = ast.parse(ref_code)
         ref_reformatted_code = astor.to_source(ref_py_ast).strip()
 

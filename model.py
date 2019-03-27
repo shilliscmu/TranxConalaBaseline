@@ -86,7 +86,7 @@ class TranxParser(nn.Module):
         finished_hypotheses = []
 
         print("parsing.")
-        while len(finished_hypotheses) < 15 and t < 100:
+        while len(finished_hypotheses) < beam_size and t < 100:
             num_of_hypotheses = len(hypotheses)
             expanded_source_encodings = source_encodings.expand(num_of_hypotheses, source_encodings.size(1),
                                                                 source_encodings.size(2))
@@ -196,7 +196,7 @@ class TranxParser(nn.Module):
                     new_hypothesis_scores = gen_token_new_hypothesis_scores
                 else:
                     new_hypothesis_scores = torch.cat([new_hypothesis_scores, gen_token_new_hypothesis_scores])
-            top_new_hypothesis_scores, top_new_hypothesis_positions = torch.topk(new_hypothesis_scores, k=min(new_hypothesis_scores.size(0), 15 - len(finished_hypotheses)))
+            top_new_hypothesis_scores, top_new_hypothesis_positions = torch.topk(new_hypothesis_scores, k=min(new_hypothesis_scores.size(0), beam_size - len(finished_hypotheses)))
 
             working_hypothesis_ids = []
             new_hypotheses = []
