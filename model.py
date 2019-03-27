@@ -10,6 +10,7 @@ from collections import OrderedDict
 import torch.nn.utils.rnn as rnn_utils
 
 from action_info import ActionInfo
+from decode_hypothesis import DecodeHypothesis
 from hypothesis import Hypothesis
 from transitions import ApplyRuleAction, ReduceAction, GenTokenAction
 
@@ -78,7 +79,7 @@ class TranxParser(nn.Module):
         for token_position, token in enumerate(sentence):
             source_token_positions_by_token.setdefault(token, []).append(token_position)
         t = 0
-        hypotheses = [Hypothesis()]
+        hypotheses = [DecodeHypothesis()]
         hypotheses_states = [[]]
         finished_hypotheses = []
 
@@ -323,7 +324,7 @@ class TranxParser(nn.Module):
         ctx = torch.matmul(att_weight.view(batch_size, 1, src_len), encodings).squeeze(1)
         #         print(ctx.shape) # B x hiddendim
         # s_att_prev is not previous in this time step, but the next step
-        s_att = torch.tanh(self.attention_vector_lin(torch.cat([ctx, h], 1)))
+        s_att = torch.tanfh(self.attention_vector_lin(torch.cat([ctx, h], 1)))
         return s_att
 
     def decode(self, batch, src_mask, encodings, final_state):
