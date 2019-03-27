@@ -230,7 +230,7 @@ class TransitionSystem(object):
             else:
                 if field.value is not None:
                     if field.type.name == 'object':
-                        if '.' in field.vlaue or 'e' in field.value:
+                        if '.' in field.value or 'e' in field.value:
                             field_val = float(field.value)
                         elif self.isint(field.value):
                             field_val = int(field.value)
