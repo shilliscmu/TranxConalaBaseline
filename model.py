@@ -370,8 +370,10 @@ class TranxParser(nn.Module):
         hW = self.ptr_net_lin(encodings)  # B x S x attsize
         if len(s_att_vecs.shape) == 2:
             s_att_vecs.unsqueeze(0)  # T = 1
-        scores = torch.matmul(s_att_vecs, hW.permute(0, 2,
-                                                     1))  # hW is (B x S x attsize), s_att_vecs is (B x T x attsize|) or H x 1 x attsize
+        # hW is (B x S x attsize), s_att_vecs is (B x T x attsize|) or H x 1 x attsize
+        print("s_att_vecs shape: " + repr(s_att_vecs.size()))
+        print("hW shape: " + repr(hW.size()))
+        scores = torch.matmul(s_att_vecs, hW.permute(0, 2, 1))
         scores = scores.permute(1, 0, 2)  # T x B x S
         # src_mask is B x S
         if src_mask is not None:
@@ -422,8 +424,8 @@ class TranxParser(nn.Module):
                         gentok_ids[ei, t] = token_idx
                         no_copy = True
                         for idx, src_tok in enumerate(src_sent):
-                            print("source token: " + repr(src_tok))
-                            print("action token: " + action_token)
+                            # print("source token: " + repr(src_tok))
+                            # print("action token: " + action_token)
                             if src_tok == action_token:
                                 is_copy_tok[ei, t, idx] = 1
                                 no_copy = False
