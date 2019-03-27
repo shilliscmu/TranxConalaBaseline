@@ -62,12 +62,8 @@ class TranxParser(nn.Module):
         primitive_vocab = self.vocab.primitive
         processed_sentence = self.process([sentence])
         source_encodings, (last_encoder_state, last_encoder_cell) = self.encode(processed_sentence, [len(sentence)])
-        self.decoder_cell_initializer_linear_layer = nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM)
-        self.decoder_cell_initializer_linear_layer = self.decoder_cell_initializer_linear_layer.cuda()
-        last_encoder_cell = last_encoder_cell.cuda()
-        print("last encoder cell size: " + repr(last_encoder_cell.size()))
         print("last encoder cell state" + repr(last_encoder_state.size()))
-        h_t1 = torch.tanh(self.decoder_cell_initializer_linear_layer(last_encoder_cell))
+        h_t1 = last_encoder_state.cuda()
 
         hypothesis_scores = Variable(torch.cuda.FloatTensor([0.]), volatile=True)
         source_token_positions_by_token = OrderedDict()
@@ -425,7 +421,7 @@ class TranxParser(nn.Module):
 
         p_a_apply = self.get_action_prob(s_att_vecs, self.attn_vec_to_action_emb,
                                          self.apply_const_and_reduce_emb)  # B x T x |a|
-        p_gen = self.gen_vs_copy_lin(s_att_vecs)  # T x B x 1
+        p_gen = F.softmax(self.gen_vs_copy_lin(s_att_vecs)) # T x B x 1
         p_copy = 1 - p_gen  # T x B x 1
         src_mask = src_mask.cuda()
         p_v_copy = self.pointer_weights(encodings, src_mask, s_att_vecs)  # B x T x S
