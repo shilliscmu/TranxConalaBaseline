@@ -82,7 +82,13 @@ class AbstractSyntaxTree(object):
             sb.write(' ')
             sb.write('(')
             sb.write(field.type.name)
-            sb.write(Field.__repr__(field.card))
+            if field.card == 'single':
+                card = ''
+            elif field.card == 'optional':
+                card = '?'
+            else:
+                card = '*'
+            sb.write(card)
             sb.write('-')
             sb.write(field.name)
 
