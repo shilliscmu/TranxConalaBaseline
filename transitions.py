@@ -225,8 +225,8 @@ class TransitionSystem(object):
                     for val in field.value:
                         node = self.asdl_ast_to_python_ast(val, grammar)
                         field_val.append(node)
-                elif field.val and field.card in ('single', 'optional'):
-                    field_val = self.asdl_ast_to_python_ast(field.val, grammar)
+                elif field.value and field.card in ('single', 'optional'):
+                    field_val = self.asdl_ast_to_python_ast(field.value, grammar)
             else:
                 if field.value is not None:
                     if field.type.name == 'object':
