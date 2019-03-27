@@ -171,7 +171,7 @@ class TranxParser(nn.Module):
                         print("num hypotheses: " + repr(num_of_hypotheses))
                         for token, token_positions in source_token_positions_by_token.items():
                             total_copy_prob = torch.gather(p_of_copying_from_source_sentence[hypothesis_id], 0, Variable(torch.cuda.LongTensor(token_positions))).sum()
-                            p_of_making_copy = p_of_making_primitive_prediction[hypothesis_id, 1] * total_copy_prob
+                            p_of_making_copy = (1 - p_of_making_primitive_prediction[hypothesis_id]) * total_copy_prob
                             if token in primitive_vocab:
                                 token_id = primitive_vocab[token]
                                 p_of_each_primitive[hypothesis_id, token_id] = p_of_each_primitive[hypothesis_id, token_id] + p_of_making_copy
@@ -406,7 +406,7 @@ class TranxParser(nn.Module):
             scores.masked_fill_(src_token_mask, -float('inf'))
         scores = scores.permute(1, 0, 2)
         if squeeze:
-            scores = scores.squeeze(1)
+            scores = scores.squeeze(0)
         print("scores from pointer weights size: " + repr(scores.size()))
         return F.softmax(scores, dim=-1)  # B x T x S or H x S
 
