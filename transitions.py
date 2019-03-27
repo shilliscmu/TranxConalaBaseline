@@ -214,7 +214,7 @@ class TransitionSystem(object):
         return ast_asdl.AbstractSyntaxTree(productions, realized_fields=fields)
 
     def asdl_ast_to_python_ast(self, asdl_ast_node, grammar):
-        node_type = getattr(sys.modules['ast'], asdl_ast_node.prodution.constructor.name)
+        node_type = getattr(sys.modules['ast'], asdl_ast_node.production.constructor.name)
         python_ast_node = node_type()
 
         for field in asdl_ast_node.fields:
