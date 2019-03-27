@@ -65,8 +65,8 @@ class TranxParser(nn.Module):
         processed_sentence = self.process([sentence])
         source_encodings, (last_encoder_state, last_encoder_cell) = self.encode(processed_sentence, [len(sentence)])
         source_encodings_attention = self.lin_attn(source_encodings)
-        print("last encoder hidden state size: " + repr(last_encoder_state.size()))
-        print("last encoder cell size: " + repr(last_encoder_cell.size()))
+        # print("last encoder hidden state size: " + repr(last_encoder_state.size()))
+        # print("last encoder cell size: " + repr(last_encoder_cell.size()))
         h_tm1 = (last_encoder_state, last_encoder_cell)
 
         # self.decoder_cell_initializer_linear_layer = nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM)
@@ -119,15 +119,15 @@ class TranxParser(nn.Module):
 
                 x = torch.cat(encoder_inputs, dim=-1)
             # print("h_tm1 size: " + repr(h_tm1.size()))
-            print("About to make a step.")
+            # print("About to make a step.")
             (h_t, cell), attention = self.step(x, h_tm1, expanded_source_encodings, expanded_source_encodings_attention)
             # p_a_apply
             log_p_of_each_apply_rule_action = (self.get_action_prob(attention, self.attn_vec_to_action_emb, self.apply_const_and_reduce_emb, True))
             # p_tok_gen
             p_of_generating_each_primitive_in_vocab = self.get_action_prob(attention, self.attn_vec_to_action_emb, self.primitives_emb)
             # p_v_copy
-            print("\nsource encodings size: " + repr(source_encodings.size()))
-            print("attention size: " + repr(attention.size()))
+            # print("\nsource encodings size: " + repr(source_encodings.size()))
+            # print("attention size: " + repr(attention.size()))
             p_of_copying_from_source_sentence = self.pointer_weights(source_encodings, None, attention)
             #p_gen, and 1-p_copy
             p_of_making_primitive_prediction = F.softmax(self.gen_vs_copy_lin(attention), dim=-1)
@@ -167,8 +167,8 @@ class TranxParser(nn.Module):
                         hypothesis_ids_for_which_we_gentoken.append(hypothesis_id)
                         hypothesis_copy_probabilities_by_token = dict()
                         copied_unks_info = []
-                        print("len of p_copying_from_source_sentence: " + repr(len(p_of_copying_from_source_sentence)))
-                        print("num hypotheses: " + repr(num_of_hypotheses))
+                        # print("len of p_copying_from_source_sentence: " + repr(len(p_of_copying_from_source_sentence)))
+                        # print("num hypotheses: " + repr(num_of_hypotheses))
                         for token, token_positions in source_token_positions_by_token.items():
                             total_copy_prob = torch.gather(p_of_copying_from_source_sentence[hypothesis_id], 0, Variable(torch.cuda.LongTensor(token_positions))).sum()
                             p_of_making_copy = (1 - p_of_making_primitive_prediction[hypothesis_id]) * total_copy_prob
@@ -277,18 +277,18 @@ class TranxParser(nn.Module):
 
         padded_sents = rnn_utils.pad_sequence(sents, batch_first=True)
         #         print(padded_sents)
-        print("About to embed source sentences.")
+        # print("About to embed source sentences.")
         embeddings = self.src_emb(padded_sents)
         print(embeddings.shape)  # B x T x embdim
-        print("About to pad embedded sentences.")
+        # print("About to pad embedded sentences.")
         inputs = rnn_utils.pack_padded_sequence(embeddings, sent_lens, batch_first=True)
-        print("About to encode embedded sentences.")
+        # print("About to encode embedded sentences.")
         inputs = inputs.cuda()
         encodings, final_state = self.encoder(inputs)
-        print("final_state shape 0 size: " + repr(final_state[0].size()))
-        print("final_state shape 1 size: " + repr(final_state[1].size()))
+        # print("final_state shape 0 size: " + repr(final_state[0].size()))
+        # print("final_state shape 1 size: " + repr(final_state[1].size()))
         encodings, lens = rnn_utils.pad_packed_sequence(encodings, batch_first=True)
-        print("encodings shape: " + repr(encodings.shape))  # B x T x hiddendim
+        # print("encodings shape: " + repr(encodings.shape))  # B x T x hiddendim
         return encodings, final_state
 
     def action_emb_from_action(self, action):
@@ -407,13 +407,13 @@ class TranxParser(nn.Module):
         scores = scores.permute(1, 0, 2)
         if squeeze:
             scores = scores.squeeze(0)
-        print("scores from pointer weights size: " + repr(scores.size()))
+        # print("scores from pointer weights size: " + repr(scores.size()))
         return F.softmax(scores, dim=-1)  # B x T x S or H x S
 
     # production_readout
     def get_action_prob(self, s_att_vecs, lin_layer, weight, doLogSoftmax=False):
         # to compute aWs. s_att_vecs: T x B x  attsize, weight: |a| x embdim, Lin layer dimx -> attsize 
-        print("getting action prob.")
+        # print("getting action prob.")
         #weight.weight is 97x128
         aW = lin_layer(weight.weight)  # |a| x  attsize
         # aW is (|a| x  attsize), s_att_vecs is (T x B x  attsize)

@@ -93,7 +93,7 @@ class AbstractSyntaxTree(object):
             sb.write(field.name)
 
             if field.value is not None:
-                for val_node in field.as_value_list():
+                for val_node in field.as_value_list:
                     sb.write(' ')
                     if isinstance(field.type, ASDLCompositeType):
                         val_node.to_string(sb)
@@ -108,7 +108,7 @@ class AbstractSyntaxTree(object):
     def size(self):
         node_count = 1
         for field in self.fields:
-            for val in field.as_value_list():
+            for val in field.as_value_list:
                 if isinstance(val, AbstractSyntaxTree):
                     node_count += val.size
                 else:
