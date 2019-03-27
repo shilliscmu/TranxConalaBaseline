@@ -24,7 +24,7 @@ class ConalaEvaluator(object):
         return ref_code_tokens == hyp_code_tokens
 
     def get_sentence_bleu(self, example, hyp):
-        return sentence_bleu([tokenize_for_bleu_eval(example.meta['example_dict']['snippet'])],
+        return sentence_bleu([tokenize_for_bleu_eval(example.info['example_dict']['snippet'])],
                              tokenize_for_bleu_eval(hyp.decanonical_code),
                              smoothing_function=SmoothingFunction().method3)
 
@@ -35,7 +35,7 @@ class ConalaEvaluator(object):
         # speed up, cache tokenization results
         if not hasattr(examples[0], 'reference_code_tokens'):
             for example in examples:
-                setattr(example, 'reference_code_tokens', tokenize_for_bleu_eval(example.meta['example_dict']['snippet']))
+                setattr(example, 'reference_code_tokens', tokenize_for_bleu_eval(example.info['example_dict']['snippet']))
 
         if not hasattr(decode_results[0][0], 'decanonical_code_tokens'):
             for i, example in enumerate(examples):
@@ -46,7 +46,7 @@ class ConalaEvaluator(object):
                 for hyp in hyp_list:
                     if not hasattr(hyp, 'decanonical_code'):
                         try:
-                            hyp.decanonical_code = decanonicalize_code(hyp.code, slot_map=example.meta['slot_map'])
+                            hyp.decanonical_code = decanonicalize_code(hyp.code, slot_map=example.info['slot_map'])
                             if hyp.decanonical_code:
                                 hyp.decanonical_code_tokens = tokenize_for_bleu_eval(hyp.decanonical_code)
                                 filtered_hyp_list.append(hyp)
