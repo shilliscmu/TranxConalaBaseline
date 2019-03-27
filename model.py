@@ -283,7 +283,7 @@ class TranxParser(nn.Module):
 
     def get_prev_action_embs(self, batch, time_step, states_sequence):
         # TODO
-        zeros_emb = torch.zeros(ACTION_EMB_SIZE)
+        zeros_emb = torch.zeros(ACTION_EMB_SIZE).cuda()
         action_embs_prev = []
         parent_states = []
         for eid, example in enumerate(batch):
@@ -297,7 +297,9 @@ class TranxParser(nn.Module):
                 parent_time_step = 0
             action_embs_prev.append(action_emb)
             parent_states.append(torch.cuda.FloatTensor(states_sequence[parent_time_step][eid]))
-        return torch.stack(action_embs_prev).cuda(), torch.stack(parent_states).cuda()
+        action_embs_prev = torch.stack(action_embs_prev).cuda()
+        parent_states = torch.stack(parent_states).cuda()
+        return action_embs_prev, parent_states
 
     def get_token_mask(self, sent_lens):
         # returns mask:  B x S, 1 where entries are to be masked, 0 for valid ones
@@ -414,12 +416,14 @@ class TranxParser(nn.Module):
                         applyconstr_ids[ei, t] = len(self.grammar)
 
                     else:  # not apply constr
-                        src_sent = self.src_sents[ei]
+                        src_sent = self.unprocessed_sents[ei]
                         action_token = str(action.token)
                         token_idx = self.vocab.primitive[action.token]
                         gentok_ids[ei, t] = token_idx
                         no_copy = True
                         for idx, src_tok in enumerate(src_sent):
+                            print("source token: " + repr(src_tok))
+                            print("action token: " + action_token)
                             if src_tok == action_token:
                                 is_copy_tok[ei, t, idx] = 1
                                 no_copy = False
@@ -485,6 +489,7 @@ class TranxParser(nn.Module):
         # batch is list of examples
         #         self.src_mask = self.get_token_mask(batch)
         self.T = max(len(e.tgt_actions) for e in batch)
+        self.unprocessed_sents = [e.sentence for e in batch]
         self.sents = [self.process(e.sentence) for e in batch]
         # print("sents len: " + repr(len(self.sents)))
         # self.sents = torch.cuda.LongTensor(self.sents)
