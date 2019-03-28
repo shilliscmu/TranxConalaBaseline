@@ -30,7 +30,7 @@ class TranxParser(nn.Module):
         self.grammar = self.transition_system.grammar
         # embeddings:
         # src text
-        self.src_emb = nn.Embedding(len(vocab.source), SRC_EMB_SIZE, padding_idx=0)
+        self.src_emb = nn.Embedding(len(vocab.source), SRC_EMB_SIZE)
         self.apply_const_and_reduce_emb = nn.Embedding(len(transition_system.grammar) + 1, ACTION_EMB_SIZE)
         # self.apply_const_and_reduce_emb = nn.Embedding(len(transition_system.grammar) + 1, ACTION_EMB_SIZE)
         self.primitives_emb = nn.Embedding(len(vocab.primitive), ACTION_EMB_SIZE)
@@ -47,7 +47,6 @@ class TranxParser(nn.Module):
         # decoder
         self.decoder_input_dim = ACTION_EMB_SIZE + FIELD_EMB_SIZE + LSTM_HIDDEN_DIM + ATT_SIZE
         self.decoder = nn.LSTMCell(input_size=self.decoder_input_dim, hidden_size=LSTM_HIDDEN_DIM)
-        self.dropout = nn.Dropout(0.2)
 
         #source_encodings_attention_linear_layer
         self.lin_attn = nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM, bias=False)
@@ -56,8 +55,8 @@ class TranxParser(nn.Module):
         # post decode
         self.ptr_net_lin = nn.Linear(LSTM_HIDDEN_DIM, ATT_SIZE, bias=False)
         self.applyconstrprob_lin = nn.Linear(ACTION_EMB_SIZE, ATT_SIZE, bias=False)
-        # self.attn_vec_to_action_emb = nn.Linear(ATT_SIZE, ACTION_EMB_SIZE, bias=False)
         self.attn_vec_to_action_emb = nn.Linear(ACTION_EMB_SIZE, ATT_SIZE, bias=False)
+        # self.primitive_predictor, but only half of it
         self.gen_vs_copy_lin = nn.Linear(ATT_SIZE, 1)
 
     def parse(self, sentence, context=None, beam_size=15):
@@ -65,16 +64,7 @@ class TranxParser(nn.Module):
         processed_sentence = self.process([sentence], False)
         source_encodings, (last_encoder_state, last_encoder_cell) = self.encode(processed_sentence, [len(sentence)])
         source_encodings_attention = self.lin_attn(source_encodings)
-        # print("last encoder hidden state size: " + repr(last_encoder_state.size()))
-        # print("last encoder cell size: " + repr(last_encoder_cell.size()))
         h_tm1 = (last_encoder_state, last_encoder_cell)
-
-        # self.decoder_cell_initializer_linear_layer = nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM)
-        # self.decoder_cell_initializer_linear_layer = self.decoder_cell_initializer_linear_layer.cuda()
-        # last_encoder_cell = last_encoder_cell.cuda()
-        # print("last encoder cell size: " + repr(last_encoder_cell.size()))
-        # print("last encoder cell state" + repr(last_encoder_state.size()))
-        # h_tm1 = torch.tanh(self.decoder_cell_initializer_linear_layer(last_encoder_cell))
 
         hypothesis_scores = Variable(torch.cuda.FloatTensor([0.]), requires_grad=False)
         source_token_positions_by_token = OrderedDict()
@@ -85,7 +75,7 @@ class TranxParser(nn.Module):
         hypotheses_states = [[]]
         finished_hypotheses = []
 
-        print("parsing.")
+        # print("parsing.")
         while len(finished_hypotheses) < beam_size and t < 100:
             num_of_hypotheses = len(hypotheses)
             expanded_source_encodings = source_encodings.expand(num_of_hypotheses, source_encodings.size(1),
@@ -118,6 +108,8 @@ class TranxParser(nn.Module):
                 encoder_inputs.append(parent_states)
 
                 x = torch.cat(encoder_inputs, dim=-1)
+
+
             # print("h_tm1 size: " + repr(h_tm1.size()))
             # print("About to make a step.")
             (h_t, cell), attention = self.step(x, h_tm1, expanded_source_encodings, expanded_source_encodings_attention)
@@ -266,9 +258,7 @@ class TranxParser(nn.Module):
         h_tm1 = (h,c)
         h_t, cell_t = self.decoder(x, h_tm1)
         # print("finished decoding.")
-        context_t = self.s_attention(expanded_source_encodings, expanded_source_encodings_attention_linear_layer, None, h_t)
-        attention = torch.tanh(self.attention_vector_lin(torch.cat([h_t, context_t], 1)))
-        attention = self.dropout(attention)
+        attention = self.s_attention(expanded_source_encodings, expanded_source_encodings_attention_linear_layer, None, h_t)
         return (h_t, cell_t), attention
 
     def encode(self, sents, sent_lens):  # done
@@ -300,7 +290,6 @@ class TranxParser(nn.Module):
         return action_emb
 
     def get_prev_action_embs(self, batch, time_step, states_sequence):
-        # TODO
         zeros_emb = torch.zeros(ACTION_EMB_SIZE).cuda()
         action_embs_prev = []
         parent_states = []
@@ -365,18 +354,10 @@ class TranxParser(nn.Module):
                 nft = self.fields_emb(torch.cuda.LongTensor(frontier))
                 inp = torch.cat([action_emb_prev, s_att_prev, nft, parent_states], dim=-1)
 
-            # print("cat'd previous action embeddings.")
-            # print("input is cuda?" + repr(inp.is_cuda()))
-            # print("h is cuda?" + repr(h.is_cuda()))
-            # print("c is cuda?" + repr(c.is_cuda()))
             inp = inp.cuda()
-            # print("input size: " + repr(inp.size()))
-            # print("h size: " + repr(h.size()))
-            # print("c size: " + repr(c.size()))
             h, c = self.decoder(inp, (h, c))
             states_sequence.append(h)
 
-            # print("computed combined attention.")
             # compute the combined attention
             src_mask = src_mask.cuda()
             s_att_prev = self.s_attention(encodings, encodings_attn, src_mask, h)
@@ -513,6 +494,7 @@ class TranxParser(nn.Module):
         # print("action_mask_pad type: " + action_mask_pad.type('torch.FloatTensor')).type()
         action_prob_target = action_prob_target.log() * (1 - action_mask_pad.type('torch.cuda.FloatTensor'))
 
+        # TODO: return scores as list?
         return torch.sum(action_prob_target, dim=0)  # B
 
     def forward(self, batch):
@@ -521,22 +503,13 @@ class TranxParser(nn.Module):
         self.T = max(len(e.tgt_actions) for e in batch)
         self.unprocessed_sents = [e.sentence for e in batch]
         self.sents = [self.process(e.sentence) for e in batch]
-        # print("sents len: " + repr(len(self.sents)))
-        # self.sents = torch.cuda.LongTensor(self.sents)
         self.sent_lens = [len(s) for s in self.sents]
         self.S = max(self.sent_lens)
-        # print(self.T, self.S, self.sent_lens)
         sent_idxs = sorted(list(range(len(self.sents))), key=lambda i: -self.sent_lens[i])
         self.sents_sorted = [self.sents[i] for i in sent_idxs]
         self.sents_lens_sorted = [self.sent_lens[i] for i in sent_idxs]
         self.examples_sorted = [batch[i] for i in sent_idxs]
-        #         return sents_sorted
-        # print(self.sents_sorted, self.sents_lens_sorted)
-        # list_of_tensor_sents = [torch.cuda.LongTensor(sent) for sent in self.sents_sorted]
-        # print("tensor of tensor sents type: " + torch.stack(list_of_tensor_sents).type())
         self.src_mask = self.get_token_mask(self.sents_lens_sorted)
-        # self.sents_sorted = torch.cuda.LongTensor(self.sents_sorted)
-        # self.sents_lens_sorted = torch.cuda.LongTensor(self.sents_lens_sorted)
 
         encodings, final_states = self.encode(self.sents_sorted, self.sents_lens_sorted)
         self.src_mask = self.src_mask.cuda()
