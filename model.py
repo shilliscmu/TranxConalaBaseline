@@ -60,9 +60,9 @@ class TranxParser(nn.Module):
         self.attn_vec_to_action_emb = nn.Linear(ACTION_EMB_SIZE, ATT_SIZE, bias=False)
         self.gen_vs_copy_lin = nn.Linear(ATT_SIZE, 1)
 
-    def parse(self, sentence, context=None, beam_size=5):
+    def parse(self, sentence, context=None, beam_size=15):
         primitive_vocab = self.vocab.primitive
-        processed_sentence = self.process([sentence])
+        processed_sentence = self.process([sentence], False)
         source_encodings, (last_encoder_state, last_encoder_cell) = self.encode(processed_sentence, [len(sentence)])
         source_encodings_attention = self.lin_attn(source_encodings)
         # print("last encoder hidden state size: " + repr(last_encoder_state.size()))
@@ -76,7 +76,7 @@ class TranxParser(nn.Module):
         # print("last encoder cell state" + repr(last_encoder_state.size()))
         # h_tm1 = torch.tanh(self.decoder_cell_initializer_linear_layer(last_encoder_cell))
 
-        hypothesis_scores = Variable(torch.cuda.FloatTensor([0.]), volatile=True)
+        hypothesis_scores = Variable(torch.cuda.FloatTensor([0.]), requires_grad=False)
         source_token_positions_by_token = OrderedDict()
         for token_position, token in enumerate(sentence):
             source_token_positions_by_token.setdefault(token, []).append(token_position)
@@ -93,7 +93,7 @@ class TranxParser(nn.Module):
             expanded_source_encodings_attention = source_encodings_attention.expand(
                 num_of_hypotheses, source_encodings_attention.size(1), LSTM_HIDDEN_DIM)
             if t == 0:
-                x = Variable(torch.cuda.FloatTensor(1, self.decoder_input_dim).zero_(), volatile=True)
+                x = Variable(torch.cuda.FloatTensor(1, self.decoder_input_dim).zero_(), requires_grad=False)
             else:
                 actions = [h.actions[-1] for h in hypotheses]
                 action_embeddings = []
@@ -121,17 +121,15 @@ class TranxParser(nn.Module):
             # print("h_tm1 size: " + repr(h_tm1.size()))
             # print("About to make a step.")
             (h_t, cell), attention = self.step(x, h_tm1, expanded_source_encodings, expanded_source_encodings_attention)
-            # p_a_apply
+            # p_a_apply, apply_rule_log_prob
             log_p_of_each_apply_rule_action = (self.get_action_prob(attention, self.attn_vec_to_action_emb, self.apply_const_and_reduce_emb, True))
-            # p_tok_gen
+            # p_tok_gen, gen_from_vocab_prob
             p_of_generating_each_primitive_in_vocab = self.get_action_prob(attention, self.attn_vec_to_action_emb, self.primitives_emb)
-            # p_v_copy
-            # print("\nsource encodings size: " + repr(source_encodings.size()))
-            # print("attention size: " + repr(attention.size()))
+            # p_v_copy, primitive_copy_prob
             p_of_copying_from_source_sentence = self.pointer_weights(source_encodings, None, attention)
-            #p_gen, and 1-p_copy
+            #p_gen, and 1-p_copy; primitive_predictor_prob
             p_of_making_primitive_prediction = F.softmax(self.gen_vs_copy_lin(attention), dim=-1)
-            # target_p_copy
+            # target_p_copy, primitive_prob
             p_of_each_primitive = p_of_making_primitive_prediction[:, 0].unsqueeze(1) * p_of_generating_each_primitive_in_vocab
 
             hypothesis_ids_for_which_we_gentoken = []
@@ -253,6 +251,7 @@ class TranxParser(nn.Module):
                 break
 
         finished_hypotheses.sort(key=lambda hyp: -hyp.score)
+        print("Length of finished hypotheses: " + repr(len(finished_hypotheses)))
         return finished_hypotheses
 
     def step(self, x, h_tm1, expanded_source_encodings, expanded_source_encodings_attention_linear_layer):
@@ -550,15 +549,16 @@ class TranxParser(nn.Module):
         print("Finshed scoring.")
         return scores_unsorted, final_states[0]
 
-    def process(self, sentence):
+    def process(self, sentences, training=True):
         source = self.vocab.source
-        if isinstance(sentence[0], (list,)):
-            processed_sent = []
-            for sent in sentence:
-                processed_sent.append(torch.cuda.LongTensor([source.__getitem__(word) for word in sent]))
-            return processed_sent
+        if isinstance(sentences[0], (list,)):
+            word_ids = [[source[word] for word in sent] for sent in sentences]
         else:
-            word_ids = [source.__getitem__(word) for word in sentence]
+            word_ids = [source[word] for word in sentences]
+
+        if not training:
+            return Variable(torch.cuda.LongTensor(word_ids), requires_grad=False)
+        else:
             return torch.cuda.LongTensor(word_ids)
 
     def save(self, path, saveGrammar):

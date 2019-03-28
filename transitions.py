@@ -243,7 +243,7 @@ class TransitionSystem(object):
                 elif field.name == 'level':
                     field_val = 0
             if field_val is None and field.card == 'multiple':
-                field_val = []
+                field_val = list()
 
             setattr(python_ast_node, field.name, field_val)
         return python_ast_node
