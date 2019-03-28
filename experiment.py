@@ -112,7 +112,7 @@ def train(train_file_path):
                             dev_score,
                             time.time() - eval_start))
 
-        is_better = history_dev_scores == [] or dev_score > max(history_dev_scores)
+        is_better = history_dev_scores == [] or dev_score >= max(history_dev_scores)
         history_dev_scores.append(dev_score)
 
         if DECAY_LR_AFTER_EPOCH and epoch > DECAY_LR_AFTER_EPOCH:
@@ -128,7 +128,7 @@ def train(train_file_path):
             model_file = SAVE_TO + '.bin'
             print('save the current model ..')
             print('save model to [%s]' % model_file)
-            model.save(model_file, False)
+            model.save(model_file, True)
             # also save the optimizers' state
             torch.save(optimizer.state_dict(), SAVE_TO + '.optim.bin')
         elif patience < PATIENCE and epoch >= DECAY_LR_AFTER_EPOCH:
@@ -180,10 +180,12 @@ def test(test_file_path, model_path):
     preprocessor = PreProcessor()
     test_data = preprocessor.get_test(test_file_path, GRAMMAR_FILE, PRIMITIVE_TYPES)
     print('load model from [%s]' % model_path,)
+
     params = torch.load(model_path, map_location=lambda storage, loc: storage)
     transition_system = params['transition_system']
-
-    parser = TranxParser.load(model_path=model_path)
+    vocab = params['vocab']
+    parser = TranxParser(vocab, transition_system)
+    parser.load_state_dict(params['state_dict'])
     parser.eval()
 
     evaluator = ConalaEvaluator(transition_system)
