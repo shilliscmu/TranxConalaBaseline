@@ -186,6 +186,7 @@ def test(test_file_path, model_path):
     vocab = params['vocab']
     parser = TranxParser(vocab, transition_system)
     parser.load_state_dict(params['state_dict'])
+    parser.cuda()
     parser.eval()
 
     evaluator = ConalaEvaluator(transition_system)
