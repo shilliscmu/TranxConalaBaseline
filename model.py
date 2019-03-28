@@ -543,9 +543,12 @@ class TranxParser(nn.Module):
         self.src_mask = self.src_mask.cuda()
         s_att_vecs = self.decode(self.examples_sorted, self.src_mask, encodings, final_states)
         print("Finshed decode.")
-        scores = self.compute_target_probabilities(encodings, s_att_vecs, self.src_mask, self.examples_sorted)
+        scores = self.compute_target_probabilities(encodings, s_att_vecs, self.src_mask, self.examples_sorted) # B
+        to_original_seq_idx = zip(sent_idxs, range(len(scores)))
+        to_original_seq_idx = list(list(zip(*sorted(to_original_seq_idx)))[1])
+        scores_unsorted = scores[to_original_seq_idx]
         print("Finshed scoring.")
-        return scores, final_states[0]
+        return scores_unsorted, final_states[0]
 
     def process(self, sentence):
         source = self.vocab.source
