@@ -47,6 +47,7 @@ class TranxParser(nn.Module):
         # decoder
         self.decoder_input_dim = ACTION_EMB_SIZE + FIELD_EMB_SIZE + LSTM_HIDDEN_DIM + ATT_SIZE
         self.decoder = nn.LSTMCell(input_size=self.decoder_input_dim, hidden_size=LSTM_HIDDEN_DIM)
+        self.dropout = nn.Dropout(DROPOUT)
 
         #source_encodings_attention_linear_layer
         self.lin_attn = nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM, bias=False)
@@ -55,16 +56,25 @@ class TranxParser(nn.Module):
         # post decode
         self.ptr_net_lin = nn.Linear(LSTM_HIDDEN_DIM, ATT_SIZE, bias=False)
         self.applyconstrprob_lin = nn.Linear(ACTION_EMB_SIZE, ATT_SIZE, bias=False)
+        self.p_apply_bias = nn.Parameter(torch.zeros(len(transition_system.grammar) + 1))
+        self.p_gen_vocab_bias = nn.Parameter(torch.zeros(len(vocab.primitive)))
+        # self.attn_vec_to_action_emb = nn.Linear(ATT_SIZE, ACTION_EMB_SIZE, bias=False)
         self.attn_vec_to_action_emb = nn.Linear(ACTION_EMB_SIZE, ATT_SIZE, bias=False)
         # self.primitive_predictor, but only half of it
         self.gen_vs_copy_lin = nn.Linear(ATT_SIZE, 1)
+
+        self.enc_to_dec_state = nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM)
 
     def parse(self, sentence, context=None, beam_size=15):
         primitive_vocab = self.vocab.primitive
         processed_sentence = self.process([sentence], False)
         source_encodings, (last_encoder_state, last_encoder_cell) = self.encode(processed_sentence, [len(sentence)])
         source_encodings_attention = self.lin_attn(source_encodings)
-        h_tm1 = (last_encoder_state, last_encoder_cell)
+
+        last_encoder_state = F.tanh(self.enc_to_dec_state(last_encoder_cell.view(1, -1)))
+        last_encoder_cell.zero_()
+
+        h_tm1 = (last_encoder_state, last_encoder_cell.view(1, -1))
 
         hypothesis_scores = Variable(torch.cuda.FloatTensor([0.]), requires_grad=False)
         source_token_positions_by_token = OrderedDict()
@@ -114,9 +124,9 @@ class TranxParser(nn.Module):
             # print("About to make a step.")
             (h_t, cell), attention = self.step(x, h_tm1, expanded_source_encodings, expanded_source_encodings_attention)
             # p_a_apply, apply_rule_log_prob
-            log_p_of_each_apply_rule_action = (self.get_action_prob(attention, self.attn_vec_to_action_emb, self.apply_const_and_reduce_emb, True))
+            log_p_of_each_apply_rule_action = (self.get_action_prob(attention, self.attn_vec_to_action_emb, self.apply_const_and_reduce_emb, True, bias=self.p_apply_bias))
             # p_tok_gen, gen_from_vocab_prob
-            p_of_generating_each_primitive_in_vocab = self.get_action_prob(attention, self.attn_vec_to_action_emb, self.primitives_emb)
+            p_of_generating_each_primitive_in_vocab = self.get_action_prob(attention, self.attn_vec_to_action_emb, self.primitives_emb,  bias=self.p_gen_vocab_bias)
             # p_v_copy, primitive_copy_prob
             p_of_copying_from_source_sentence = self.pointer_weights(source_encodings, None, attention)
             #p_gen, and 1-p_copy; primitive_predictor_prob
@@ -330,6 +340,7 @@ class TranxParser(nn.Module):
         #         print(ctx.shape) # B x hiddendim
         # s_att_prev is not previous in this time step, but the next step
         s_att = torch.tanh(self.attention_vector_lin(torch.cat([ctx, h], 1)))
+        s_att = self.dropout(s_att)
         return s_att
 
     def decode(self, batch, src_mask, encodings, final_state):
@@ -340,6 +351,9 @@ class TranxParser(nn.Module):
         #         print(h.shape)
         h, c = h.view(batch_size, -1), c.view(batch_size, -1)
         #         print(h.shape) B x hiddendim
+        h = F.tanh(self.enc_to_dec_state(c))
+        c.zero_()
+
 
         inp = torch.zeros(batch_size, self.decoder_input_dim)
         states_sequence, s_att_all = [], []
@@ -391,12 +405,15 @@ class TranxParser(nn.Module):
         return F.softmax(scores, dim=-1)  # B x T x S or H x S
 
     # production_readout
-    def get_action_prob(self, s_att_vecs, lin_layer, weight, doLogSoftmax=False):
+    def get_action_prob(self, s_att_vecs, lin_layer, weight, doLogSoftmax=False, bias=None):
         # to compute aWs. s_att_vecs: T x B x  attsize, weight: |a| x embdim, Lin layer dimx -> attsize 
         # print("getting action prob.")
         #weight.weight is 97x128
         aW = lin_layer(weight.weight)  # |a| x  attsize
         # aW is (|a| x  attsize), s_att_vecs is (T x B x  attsize)
+        if bias is not None:
+            aW = aW + bias.unsqueeze(0).t()
+
         #aW is self.production_embed.weight
         scores = torch.matmul(s_att_vecs, aW.t())
         if len(scores.shape) == 3:
@@ -449,12 +466,12 @@ class TranxParser(nn.Module):
         is_applyconstr, is_gentoken, is_copy, applyconstr_ids, gentok_ids, is_copy_tok = [e.cuda() for e in self.get_rule_masks(batch)]
 
         p_a_apply = self.get_action_prob(s_att_vecs, self.attn_vec_to_action_emb,
-                                         self.apply_const_and_reduce_emb)  # B x T x |a|
+                                         self.apply_const_and_reduce_emb, bias=self.p_apply_bias)  # B x T x |a|
         p_gen = F.softmax(self.gen_vs_copy_lin(s_att_vecs)) # T x B x 1
         p_copy = 1 - p_gen  # T x B x 1
         src_mask = src_mask.cuda()
         p_v_copy = self.pointer_weights(encodings, src_mask, s_att_vecs)  # B x T x S
-        p_tok_gen = self.get_action_prob(s_att_vecs, self.attn_vec_to_action_emb, self.primitives_emb)  # B x T x |t|
+        p_tok_gen = self.get_action_prob(s_att_vecs, self.attn_vec_to_action_emb, self.primitives_emb, bias=self.p_gen_vocab_bias)  # B x T x |t|
 
         # print("p_v_copy type: " + p_v_copy.type())
         # print("is_copy_tok type: " + is_copy_tok.type())
