@@ -47,7 +47,7 @@ class TranxParser(nn.Module):
         # decoder
         self.decoder_input_dim = ACTION_EMB_SIZE + FIELD_EMB_SIZE + LSTM_HIDDEN_DIM + ATT_SIZE
         self.decoder = nn.LSTMCell(input_size=self.decoder_input_dim, hidden_size=LSTM_HIDDEN_DIM)
-        self.dropout = nn.Dropout(0.2)
+        self.dropout = nn.Dropout(DROPOUT)
 
         #source_encodings_attention_linear_layer
         self.lin_attn = nn.Linear(LSTM_HIDDEN_DIM, LSTM_HIDDEN_DIM, bias=False)
@@ -340,6 +340,7 @@ class TranxParser(nn.Module):
         #         print(ctx.shape) # B x hiddendim
         # s_att_prev is not previous in this time step, but the next step
         s_att = torch.tanh(self.attention_vector_lin(torch.cat([ctx, h], 1)))
+        s_att = self.dropout(s_att)
         return s_att
 
     def decode(self, batch, src_mask, encodings, final_state):
