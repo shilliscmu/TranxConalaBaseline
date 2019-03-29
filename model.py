@@ -71,7 +71,7 @@ class TranxParser(nn.Module):
         source_encodings, (last_encoder_state, last_encoder_cell) = self.encode(processed_sentence, [len(sentence)])
         source_encodings_attention = self.lin_attn(source_encodings)
 
-        last_encoder_state = self.enc_to_dec_state(last_encoder_state.view(1, -1))
+        last_encoder_state = F.tanh(self.enc_to_dec_state(last_encoder_cell.view(1, -1)))
         last_encoder_cell.zero_()
 
         h_tm1 = (last_encoder_state, last_encoder_cell.view(1, -1))
@@ -351,7 +351,7 @@ class TranxParser(nn.Module):
         #         print(h.shape)
         h, c = h.view(batch_size, -1), c.view(batch_size, -1)
         #         print(h.shape) B x hiddendim
-        h = self.enc_to_dec_state(h)
+        h = F.tanh(self.enc_to_dec_state(c))
         c.zero_()
 
 
